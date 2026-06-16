@@ -1,3 +1,4 @@
+pub mod daemon;
 pub mod db;
 pub mod silence;
 pub mod state;
