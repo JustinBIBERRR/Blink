@@ -1,5 +1,5 @@
 {
-  "productName": "blink-rs",
+  "productName": "Blink",
   "version": "0.1.0",
   "identifier": "dev.blink-rs.app",
   "build": {
@@ -49,7 +49,7 @@
       }
     ],
     "security": {
-      "csp": null
+      "csp": "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'"
     }
   },
   "bundle": {

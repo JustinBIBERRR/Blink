@@ -5,7 +5,6 @@
   "windows": ["overlay", "stats", "settings"],
   "permissions": [
     "core:default",
-    "notification:default",
-    "global-shortcut:default"
+    "notification:default"
   ]
 }
