@@ -1,6 +1,8 @@
 pub mod daemon;
 pub mod db;
+pub mod hotkey;
 pub mod silence;
+pub mod startup;
 pub mod state;
 pub mod tray;
 
