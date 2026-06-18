@@ -1,3 +1,4 @@
+mod capture;
 mod commands;
 mod daemon;
 mod db;
@@ -7,15 +8,28 @@ mod startup;
 mod state;
 mod tray;
 
-use commands::{AppConfig, AppDb};
+use commands::{AppConfig, AppDb, AppSharedState};
 use daemon::SharedState;
 use db::Db;
-use state::{DaemonConfig, DaemonState, Phase};
+use state::{DaemonConfig, DaemonState, OverlayHole, Phase};
 use std::sync::{Arc, Mutex};
 use tauri::{Emitter, Listener, Manager};
 
 pub fn run() {
-    let config = DaemonConfig::default();
+    // Default to info-level logging unless overridden via RUST_LOG.
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
+
+    let mut config = DaemonConfig::default();
+
+    // Dev affordance: `BLINK_DEV_INTERVAL=5` triggers a break after 5s so the
+    // overlay can be exercised without waiting 20 minutes.
+    if let Some(secs) = std::env::var("BLINK_DEV_INTERVAL")
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok())
+    {
+        config.interval_secs = secs;
+        log::info!("dev: interval_secs overridden to {secs}");
+    }
 
     // SQLite path: %LOCALAPPDATA%/blink-rs/sessions.db
     let db_path = dirs::data_local_dir()
@@ -46,6 +60,7 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .manage(AppDb(db.clone()))
         .manage(AppConfig(shared_config.clone()))
+        .manage(AppSharedState(shared_state.clone()))
         .setup(move |app| {
             // System tray
             tray::setup_tray(&app.handle())?;
@@ -85,6 +100,7 @@ pub fn run() {
                         }
                     }
                     // Emit phase change to all windows
+                    log::info!("phase -> {phase:?}");
                     let _ = app_handle.emit("blink://phase", &phase);
                     // Show/hide overlay window
                     if let Some(overlay) = app_handle.get_webview_window("overlay") {
@@ -92,6 +108,36 @@ pub fn run() {
                             Phase::Monitoring => {
                                 let _ = overlay.hide();
                             }
+                            Phase::Warning => {
+                                // Capture the clean desktop BEFORE showing the overlay, so the
+                                // frozen snapshot doesn't include our own window. The overlay
+                                // blurs these pixels behind the radial mask during spreading.
+                                match capture::capture_primary_screen_data_url(2) {
+                                    Ok(data_url) => {
+                                        let _ = app_handle.emit("blink://capture", data_url);
+                                    }
+                                    Err(e) => {
+                                        log::warn!("screen capture failed: {e}");
+                                        let _ = app_handle.emit("blink://capture", String::new());
+                                    }
+                                }
+                                // Resize to primary monitor physical resolution before showing
+                                if let Ok(Some(monitor)) = overlay.primary_monitor() {
+                                    let sz = monitor.size();
+                                    let pos = monitor.position();
+                                    let _ = overlay.set_size(tauri::Size::Physical(
+                                        tauri::PhysicalSize { width: sz.width, height: sz.height },
+                                    ));
+                                    let _ = overlay.set_position(tauri::Position::Physical(
+                                        tauri::PhysicalPosition { x: pos.x, y: pos.y },
+                                    ));
+                                }
+                                // SPIKE 2: whole-window click-through. Verify transparency
+                                // stays intact now that the body is transparent (Task 1).
+                                let _ = overlay.set_ignore_cursor_events(true);
+                                let _ = overlay.show();
+                            }
+                            // Spreading / Holding / Dissolving: just keep it shown.
                             _ => {
                                 let _ = overlay.show();
                             }
@@ -99,6 +145,84 @@ pub fn run() {
                     }
                 },
             ));
+
+            // Overlay region animator.
+            // Cuts an elliptical hole in the overlay window via SetWindowRgn so the
+            // clear center genuinely shows the live desktop (the only reliable way —
+            // a transparent webview pixel does not reveal the desktop here). The hole
+            // shrinks (spreading) / grows (dissolving); Holding has no hole.
+            let app_for_region = app.handle().clone();
+            let state_for_region = state_clone.clone();
+            std::thread::spawn(move || {
+                use windows::Win32::Foundation::{BOOL, HWND};
+                use windows::Win32::Graphics::Gdi::{
+                    CombineRgn, CreateEllipticRgn, CreateRectRgn, DeleteObject, SetWindowRgn,
+                    HGDIOBJ, HRGN, RGN_DIFF,
+                };
+
+                // Dedup marker: 2.0 == Full, otherwise the Frame fraction.
+                let mut last: Option<f64> = None;
+                loop {
+                    std::thread::sleep(std::time::Duration::from_millis(20));
+
+                    let hole = {
+                        let s = state_for_region.lock().unwrap();
+                        s.overlay_hole()
+                    };
+
+                    let marker = match hole {
+                        OverlayHole::Hidden => {
+                            last = None;
+                            continue;
+                        }
+                        OverlayHole::Full => 2.0,
+                        OverlayHole::Frame(f) => f,
+                    };
+                    if last == Some(marker) {
+                        continue;
+                    }
+
+                    let overlay = match app_for_region.get_webview_window("overlay") {
+                        Some(w) => w,
+                        None => continue,
+                    };
+                    let size = match overlay.inner_size() {
+                        Ok(s) => s,
+                        Err(_) => continue,
+                    };
+                    let hwnd = match overlay.hwnd() {
+                        Ok(h) => HWND(h.0 as *mut core::ffi::c_void),
+                        Err(_) => continue,
+                    };
+                    let w = size.width as i32;
+                    let h = size.height as i32;
+                    if w <= 0 || h <= 0 {
+                        continue;
+                    }
+
+                    unsafe {
+                        let region: HRGN = match hole {
+                            OverlayHole::Full => CreateRectRgn(0, 0, w, h),
+                            OverlayHole::Frame(f) => {
+                                let outer = CreateRectRgn(0, 0, w, h);
+                                let hole_w = (f * w as f64) as i32;
+                                let hole_h = (f * h as f64) as i32;
+                                let left = (w - hole_w) / 2;
+                                let top = (h - hole_h) / 2;
+                                let hole_rgn =
+                                    CreateEllipticRgn(left, top, left + hole_w, top + hole_h);
+                                CombineRgn(outer, outer, hole_rgn, RGN_DIFF);
+                                let _ = DeleteObject(HGDIOBJ(hole_rgn.0));
+                                outer
+                            }
+                            OverlayHole::Hidden => unreachable!(),
+                        };
+                        let _ = SetWindowRgn(hwnd, region, BOOL(1));
+                    }
+
+                    last = Some(marker);
+                }
+            });
 
             // Hotkey listener thread
             // HotkeyManager MUST stay alive inside the thread to keep the hotkey registered.
@@ -142,10 +266,14 @@ pub fn run() {
             app.listen("blink://pause", move |event: tauri::Event| {
                 if let Ok(secs) = serde_json::from_str::<u64>(event.payload()) {
                     let mut s = state_for_pause.lock().unwrap();
-                    s.paused_until = Some(
-                        std::time::Instant::now() + std::time::Duration::from_secs(secs),
-                    );
-                    s.transition_to(Phase::Monitoring);
+                    if secs == 0 {
+                        s.paused_until = None;
+                    } else {
+                        s.paused_until = Some(
+                            std::time::Instant::now() + std::time::Duration::from_secs(secs),
+                        );
+                        s.transition_to(Phase::Monitoring);
+                    }
                 }
             });
 
@@ -157,6 +285,7 @@ pub fn run() {
             commands::get_stats_month,
             commands::get_config,
             commands::save_config,
+            commands::close_panel,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
