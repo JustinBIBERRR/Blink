@@ -11,7 +11,7 @@ mod tray;
 use commands::{AppConfig, AppDb, AppSharedState};
 use daemon::SharedState;
 use db::Db;
-use state::{DaemonConfig, DaemonState, OverlayHole, Phase};
+use state::{DaemonConfig, DaemonState, Phase};
 use std::sync::{Arc, Mutex};
 use tauri::{Emitter, Listener, Manager};
 
@@ -146,83 +146,10 @@ pub fn run() {
                 },
             ));
 
-            // Overlay region animator.
-            // Cuts an elliptical hole in the overlay window via SetWindowRgn so the
-            // clear center genuinely shows the live desktop (the only reliable way —
-            // a transparent webview pixel does not reveal the desktop here). The hole
-            // shrinks (spreading) / grows (dissolving); Holding has no hole.
-            let app_for_region = app.handle().clone();
-            let state_for_region = state_clone.clone();
-            std::thread::spawn(move || {
-                use windows::Win32::Foundation::{BOOL, HWND};
-                use windows::Win32::Graphics::Gdi::{
-                    CombineRgn, CreateEllipticRgn, CreateRectRgn, DeleteObject, SetWindowRgn,
-                    HGDIOBJ, HRGN, RGN_DIFF,
-                };
-
-                // Dedup marker: 2.0 == Full, otherwise the Frame fraction.
-                let mut last: Option<f64> = None;
-                loop {
-                    std::thread::sleep(std::time::Duration::from_millis(20));
-
-                    let hole = {
-                        let s = state_for_region.lock().unwrap();
-                        s.overlay_hole()
-                    };
-
-                    let marker = match hole {
-                        OverlayHole::Hidden => {
-                            last = None;
-                            continue;
-                        }
-                        OverlayHole::Full => 2.0,
-                        OverlayHole::Frame(f) => f,
-                    };
-                    if last == Some(marker) {
-                        continue;
-                    }
-
-                    let overlay = match app_for_region.get_webview_window("overlay") {
-                        Some(w) => w,
-                        None => continue,
-                    };
-                    let size = match overlay.inner_size() {
-                        Ok(s) => s,
-                        Err(_) => continue,
-                    };
-                    let hwnd = match overlay.hwnd() {
-                        Ok(h) => HWND(h.0 as *mut core::ffi::c_void),
-                        Err(_) => continue,
-                    };
-                    let w = size.width as i32;
-                    let h = size.height as i32;
-                    if w <= 0 || h <= 0 {
-                        continue;
-                    }
-
-                    unsafe {
-                        let region: HRGN = match hole {
-                            OverlayHole::Full => CreateRectRgn(0, 0, w, h),
-                            OverlayHole::Frame(f) => {
-                                let outer = CreateRectRgn(0, 0, w, h);
-                                let hole_w = (f * w as f64) as i32;
-                                let hole_h = (f * h as f64) as i32;
-                                let left = (w - hole_w) / 2;
-                                let top = (h - hole_h) / 2;
-                                let hole_rgn =
-                                    CreateEllipticRgn(left, top, left + hole_w, top + hole_h);
-                                CombineRgn(outer, outer, hole_rgn, RGN_DIFF);
-                                let _ = DeleteObject(HGDIOBJ(hole_rgn.0));
-                                outer
-                            }
-                            OverlayHole::Hidden => unreachable!(),
-                        };
-                        let _ = SetWindowRgn(hwnd, region, BOOL(1));
-                    }
-
-                    last = Some(marker);
-                }
-            });
+            // No window region: the clear center is produced by the CSS gradient
+            // mask over a transparent window (Task 1). Interaction is handled by
+            // whole-window click-through (set_ignore_cursor_events on show), not by
+            // cutting the window — so the clear->blur edge stays a soft gradient.
 
             // Hotkey listener thread
             // HotkeyManager MUST stay alive inside the thread to keep the hotkey registered.
