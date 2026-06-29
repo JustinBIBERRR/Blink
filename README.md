@@ -1,7 +1,61 @@
-# Tauri + Vue + TypeScript
+<div align="center">
 
-This template should help get you started developing with Vue 3 and TypeScript in Vite. The template uses Vue 3 `<script setup>` SFCs, check out the [script setup docs](https://v3.vuejs.org/api/sfc-script-setup.html#sfc-script-setup) to learn more.
+# 👁 Blink
 
-## Recommended IDE Setup
+**面向硬核开发者与重度 PC 用户的沉浸式护眼守护进程**
 
-- [VS Code](https://code.visualstudio.com/) + [Vue - Official](https://marketplace.visualstudio.com/items?itemName=Vue.volar) + [Tauri](https://marketplace.visualstudio.com/items?itemName=tauri-apps.tauri-vscode) + [rust-analyzer](https://marketplace.visualstudio.com/items?itemName=rust-lang.rust-analyzer)
+用「环境拟态物理干预」重塑用眼肌肉记忆，而非又一个被秒关的弹窗。
+
+[![build](https://github.com/JustinBIBERRR/Blink/actions/workflows/build-windows.yml/badge.svg?branch=develop)](https://github.com/JustinBIBERRR/Blink/actions/workflows/build-windows.yml)
+&nbsp;·&nbsp; Tauri 2 · Rust · Vue 3 &nbsp;·&nbsp; Windows &nbsp;·&nbsp; 零遥测 · MIT
+
+</div>
+
+---
+
+## 它解决什么问题
+
+处于高强度心流（写代码、部署、FPS 竞技）中的人，对系统性的眼部疲劳存在**防御性忽略**。传统护眼软件靠弹窗 / 强制锁屏提醒，是一种敌意打断（Hostile Interruption），最终都沦为肌肉记忆式的「秒关 + 卸载」。
+
+Blink 不讲道理、不发弹窗。它把「文字建议」降维成**边缘视觉的渐进式高斯模糊**——利用人眼对边缘动态模糊的敏感性，温和却不可忽视地把你的视觉焦点从屏幕上「推开」，强制眼球远眺放松。该休息时，屏幕自己会「化开」；你静下来，它自己会「化回去」。
+
+## 核心特性
+
+- 🌫️ **渐进式视觉遮罩**——触发时唤起无边框透明置顶窗口，模糊从屏幕边缘向中心匀速收缩，最终只留中心一小块清晰区。基于冻结桌面快照做真实高斯模糊，而非廉价的纯色蒙版。
+- ⌨️ **全程事件穿透**——遮罩层系统级鼠标/键盘穿透（Win `WS_EX_TRANSPARENT`），盲打、热键操作完全不受阻碍，模糊只作用于「看」，不作用于「用」。
+- 🧘 **物理映射逃生（Rest to Unblur）**——检测到键鼠绝对静止一段时间后，模糊自动以更快速度退散；中途一旦有输入，退散立即冻结。把「休息」变成你身体自然完成的动作。
+- 🎯 **完全自定义取消热键**——支持任意组合键一键跳过（含 `F1`、`Esc` 等单键与 `Ctrl+Shift+F1` 等组合）。底层键盘钩子实时读取物理按键状态，遮罩上的提示始终跟随你的真实设置。
+- 🤫 **智能静默引擎**——轮询系统通知状态，识别**全屏 D3D 游戏**与**演示/会议模式**时自动挂起计时，绝不在你推塔或跨国会议时弹起遮罩。
+- 🪶 **极致轻量**——Rust + Tauri 原生实现，**严禁 Electron**。监听期常驻 CPU < 0.5%、内存 < 30MB 为设计红线。
+- 🔒 **零遥测 · 本地优先**——休息数据仅存本地 SQLite，无云端、无账号、无埋点。
+- 🗂️ **极简系统托盘**——暂停打扰（1 小时 / 3 小时 / 今日关闭）、查看统计、设置，全部收纳在一个右键菜单里。
+
+## 与现有方案的区别
+
+| 方案 | 代表产品 | 核心逻辑 | Blink 的差异 |
+| :-- | :-- | :-- | :-- |
+| 休息提醒类 | Stretchly、Workrave | 番茄钟式弹窗 / 强制锁屏 | 规则僵化、打断感极强、易被秒关卸载；Blink 用无弹窗的环境干预 + 静止即解锁 |
+| 防蓝光类 | F.lux、护眼宝 | 调节屏幕色温 | 治标不治本，且已被系统夜间模式原生收编；Blink 针对的是**视觉焦距与远眺**，不是色温 |
+| 游戏化番茄钟 | Forest | 种树激励对抗沉迷 | 非眼部生理特化，解决不了全屏重度场景；Blink 专注用眼干预本身 |
+| 硬件提醒 | Apple Watch 站立提醒 | 体征监测 + 触觉震动 | 依赖特定硬件、偏全身活动；Blink 零硬件、聚焦眼部焦距放松 |
+
+**护城河**：基于操作系统原生断言的高优场景静默 + 键鼠物理状态映射的「零 UI 交互闭环」+ 多屏差异化渲染降级策略。
+
+## 技术栈
+
+| 层 | 选型 |
+| :-- | :-- |
+| 框架 | [Tauri 2](https://tauri.app/)（Rust 后端 + WebView 前端，非 Electron） |
+| 前端 | Vue 3 `<script setup>` + TypeScript + Vite |
+| 系统层 | Win32 API（低级键盘钩子、GDI 桌面截屏、通知状态轮询、全局热键穿透） |
+| 存储 | 本地 SQLite（休息会话统计） |
+
+> 跨端解耦：Mac 的 Cocoa/IOKit 与 Win 的 Win32 在 Rust 层统一封装为抽象 Trait，前端业务逻辑保持纯净。当前发布平台为 Windows。
+
+## 下载
+
+每次推送到 `develop` 分支后，CI 会自动构建并产出 Windows 安装包（NSIS `.exe` / MSI）与免安装可执行文件，可在仓库 **Actions → build-windows → Artifacts** 中下载。
+
+## 许可证
+
+[MIT](./LICENSE)
