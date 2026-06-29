@@ -81,6 +81,7 @@ mod hook {
 
     use windows::Win32::Foundation::{HINSTANCE, LPARAM, LRESULT, WPARAM};
     use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+    use windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState;
     use windows::Win32::UI::WindowsAndMessaging::{
         CallNextHookEx, GetMessageW, SetWindowsHookExW, HHOOK, KBDLLHOOKSTRUCT, MSG,
         WH_KEYBOARD_LL, WM_KEYDOWN, WM_KEYUP, WM_SYSKEYDOWN, WM_SYSKEYUP,
@@ -89,10 +90,13 @@ mod hook {
     static ACTIVE_COMBO: Mutex<Vec<u32>> = Mutex::new(Vec::new());
     static ARMED: AtomicBool = AtomicBool::new(true);
     static ESCAPE_TX: OnceLock<Sender<()>> = OnceLock::new();
-    static PRESSED: OnceLock<Mutex<HashSet<u32>>> = OnceLock::new();
 
-    fn pressed() -> &'static Mutex<HashSet<u32>> {
-        PRESSED.get_or_init(|| Mutex::new(HashSet::new()))
+    /// True if `vk` is physically held right now, per the OS async key-state
+    /// table. Used instead of a hook-maintained pressed-set so a KEYUP we never
+    /// received (e.g. an elevated window like Task Manager grabbed focus after
+    /// Ctrl+Shift+Esc) cannot leave a key stuck "down".
+    unsafe fn async_down(vk: u32) -> bool {
+        (GetAsyncKeyState(vk as i32) as u16 & 0x8000) != 0
     }
 
     pub fn set_combo(combo: Vec<u32>) {
@@ -131,32 +135,33 @@ mod hook {
         lparam: LPARAM,
     ) -> LRESULT {
         if code >= 0 {
-            let kb = &*(lparam.0 as *const KBDLLHOOKSTRUCT);
-            let vk = normalize_vk(kb.vkCode);
-            match wparam.0 as u32 {
-                WM_KEYDOWN | WM_SYSKEYDOWN => {
-                    let fire = {
-                        let mut p = pressed().lock().unwrap();
-                        p.insert(vk);
-                        let combo = ACTIVE_COMBO.lock().unwrap();
-                        ARMED.load(Ordering::Relaxed) && combo_matches(&p, &combo)
-                    };
-                    if fire {
-                        ARMED.store(false, Ordering::Relaxed);
-                        if let Some(tx) = ESCAPE_TX.get() {
-                            let _ = tx.send(());
+            let msg = wparam.0 as u32;
+            if matches!(msg, WM_KEYDOWN | WM_SYSKEYDOWN | WM_KEYUP | WM_SYSKEYUP) {
+                let kb = &*(lparam.0 as *const KBDLLHOOKSTRUCT);
+                let changed = normalize_vk(kb.vkCode);
+                let changed_down = matches!(msg, WM_KEYDOWN | WM_SYSKEYDOWN);
+                let combo = ACTIVE_COMBO.lock().unwrap().clone();
+                if !combo.is_empty() {
+                    // The key in flight isn't in the async table yet, so use the
+                    // message's direction for it; read every other combo key from
+                    // the real OS state (immune to KEYUPs we never saw).
+                    let down: HashSet<u32> = combo
+                        .iter()
+                        .copied()
+                        .filter(|&vk| if vk == changed { changed_down } else { async_down(vk) })
+                        .collect();
+                    if combo_matches(&down, &combo) {
+                        // Edge-trigger: fire once per press, re-arm when the combo
+                        // is no longer fully held.
+                        if ARMED.swap(false, Ordering::Relaxed) {
+                            if let Some(tx) = ESCAPE_TX.get() {
+                                let _ = tx.send(());
+                            }
                         }
-                    }
-                }
-                WM_KEYUP | WM_SYSKEYUP => {
-                    let mut p = pressed().lock().unwrap();
-                    p.remove(&vk);
-                    // Re-arm once any combo key is released (edge-triggered).
-                    if ACTIVE_COMBO.lock().unwrap().contains(&vk) {
+                    } else {
                         ARMED.store(true, Ordering::Relaxed);
                     }
                 }
-                _ => {}
             }
         }
         CallNextHookEx(HHOOK(std::ptr::null_mut()), code, wparam, lparam)
