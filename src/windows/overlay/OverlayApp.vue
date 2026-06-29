@@ -5,7 +5,7 @@
     <!-- Frosted blur of the frozen snapshot; clear center shows live desktop -->
     <CaptureLayer :src="capture" />
     <!-- Vignette + bottom hints -->
-    <OverlayChrome :phase="phase" />
+    <OverlayChrome :phase="phase" :hotkey="hotkey" />
     <!-- Holding-phase ethereal glow ring + rest text -->
     <EtherealGlow v-if="phase === 'holding'" />
   </div>
@@ -16,10 +16,11 @@ import CircuitTraces from './CircuitTraces.vue';
 import CaptureLayer from './CaptureLayer.vue';
 import OverlayChrome from './OverlayChrome.vue';
 import EtherealGlow from './EtherealGlow.vue';
-import { usePhase, useCapture } from '../../composables/useBlink';
+import { usePhase, useCapture, useHotkey } from '../../composables/useBlink';
 
 const { phase } = usePhase();
 const { capture } = useCapture();
+const { hotkey } = useHotkey();
 </script>
 
 <style>

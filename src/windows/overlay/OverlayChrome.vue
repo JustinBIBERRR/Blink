@@ -6,11 +6,11 @@
 
   <!-- Bottom hints (sit at the bottom edge = inside the frame). -->
   <template v-if="phase === 'spreading' || phase === 'holding' || phase === 'dissolving'">
-    <div v-if="phase === 'spreading'" class="bottom-hint bright">
-      <kbd>Ctrl+Shift+Space</kbd> 跳过
+    <div v-if="phase === 'spreading' && hotkey" class="bottom-hint bright">
+      <kbd>{{ hotkey }}</kbd> 跳过
     </div>
-    <div v-if="phase === 'holding'" class="bottom-hint dim">
-      <kbd>Ctrl+Shift+Space</kbd> 提前退出
+    <div v-if="phase === 'holding' && hotkey" class="bottom-hint dim">
+      <kbd>{{ hotkey }}</kbd> 提前退出
     </div>
     <div v-if="phase === 'dissolving'" class="bottom-hint green">
       ✓ 护眼完成，恢复中…
@@ -21,7 +21,7 @@
 <script setup lang="ts">
 import type { Phase } from '../../types/blink';
 
-defineProps<{ phase: Phase }>();
+defineProps<{ phase: Phase; hotkey: string }>();
 </script>
 
 <style scoped>
