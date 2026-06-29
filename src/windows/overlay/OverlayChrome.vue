@@ -1,8 +1,8 @@
 <template>
-  <!-- Vignette + seam glow over the blurred snapshot. No backdrop-filter here:
-       the real blur comes from CaptureLayer; this layer only darkens toward the
-       edges and draws a faint blue seam at the moving hole boundary. -->
-  <div class="vignette" :style="vignetteStyle" />
+  <!-- Deep vignette over the blur. No backdrop-filter; the real blur is in
+       CaptureLayer. Driven by the same --clear/--frost CSS vars so it darkens the
+       edges in lock-step with the blur, smoothly (CSS-animated, no stepping). -->
+  <div class="vignette" />
 
   <!-- Bottom hints (sit at the bottom edge = inside the frame). -->
   <template v-if="phase === 'spreading' || phase === 'holding' || phase === 'dissolving'">
@@ -19,34 +19,9 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue';
 import type { Phase } from '../../types/blink';
 
-const props = defineProps<{
-  phase: Phase;
-  holeFrac: number;
-  blurOpacity: number;
-}>();
-
-// Deep vignette over the blur, using the Stitch stops (transparent core →
-// rgba(24,24,37,…) deepening to the edge), eased to follow the blur mask band so
-// the two darken together smoothly (no step). Edge alpha follows the design.
-const vignetteStyle = computed(() => {
-  const f = props.holeFrac;
-  const inner = Math.max(f * 100, 0);
-  const span = 100 - inner;
-  const s1 = (inner + span * 0.3).toFixed(1);
-  const s2 = (inner + span * 0.7).toFixed(1);
-  const bg =
-    f <= 0.02
-      ? `radial-gradient(ellipse farthest-side at 50% 50%, rgba(24,24,37,0.10), rgba(24,24,37,0.50) 100%)`
-      : `radial-gradient(ellipse farthest-side at 50% 50%,
-           transparent ${inner.toFixed(1)}%,
-           rgba(24,24,37,0.10) ${s1}%,
-           rgba(24,24,37,0.30) ${s2}%,
-           rgba(24,24,37,0.50) 100%)`;
-  return { background: bg, opacity: props.blurOpacity };
-});
+defineProps<{ phase: Phase }>();
 </script>
 
 <style scoped>
@@ -54,7 +29,17 @@ const vignetteStyle = computed(() => {
   position: fixed;
   inset: 0;
   pointer-events: none;
-  transition: opacity 0.3s ease;
+  opacity: var(--frost, 0);
+  transition: opacity 0.4s ease, background 0.5s ease;
+  /* Stitch deep-vignette stops: transparent clear core → rgba(24,24,37,…)
+     deepening to the edge. Inner radius tracks --clear so it darkens in
+     lock-step with the blur iris. */
+  background: radial-gradient(
+    ellipse farthest-side at 50% 50%,
+    transparent calc(var(--clear, 0.92) * 100%),
+    rgba(24, 24, 37, 0.3) 70%,
+    rgba(24, 24, 37, 0.5) 100%
+  );
 }
 
 

@@ -22,6 +22,29 @@ export function usePhase() {
   return { phase };
 }
 
+/**
+ * Frozen desktop snapshot captured by the Rust backend at the start of a break.
+ * Emitted once per cycle as a `data:image/bmp;base64,...` URL (empty on failure).
+ * The overlay blurs this behind a radial mask so the clear hole shows the live
+ * desktop while the surrounding frame shows the blurred snapshot.
+ */
+export function useCapture() {
+  const capture = ref<string>('');
+  let unlisten: (() => void) | null = null;
+
+  onMounted(async () => {
+    unlisten = await listen<string>('blink://capture', (event) => {
+      capture.value = event.payload ?? '';
+    });
+  });
+
+  onUnmounted(() => {
+    unlisten?.();
+  });
+
+  return { capture };
+}
+
 export async function getStatsToday(): Promise<StatsToday> {
   return invoke<StatsToday>('get_stats_today');
 }

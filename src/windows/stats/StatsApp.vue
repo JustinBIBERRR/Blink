@@ -1,94 +1,97 @@
 <template>
-  <div class="panel" @mousedown.stop>
-    <!-- Drag bar for frameless window -->
-    <div class="drag-bar" data-tauri-drag-region></div>
-
-    <!-- Header -->
-    <header>
-      <div class="brand">
-        <span class="eye">👁</span>
-        <strong>Blink</strong>
-        <span class="sep">·</span>
-        <span class="subtitle">Eye Health</span>
-      </div>
-      <button class="close-btn" @click="closePanel">×</button>
-    </header>
-    <div class="divider" />
-
-    <!-- Today -->
-    <section class="section">
-      <div class="row-spread">
-        <span class="label-caps">TODAY</span>
-        <span class="count-text">{{ today.completed }} / {{ today.total_sessions || 8 }} sessions</span>
-      </div>
-      <div class="progress-track">
-        <div class="progress-fill" :style="{ width: today.compliance_pct + '%' }" />
-      </div>
-      <div class="note">{{ today.compliance_pct }}% compliance · {{ Math.max(0, 8 - today.total_sessions) }} remaining</div>
-    </section>
-    <div class="divider" />
-
-    <!-- This Week -->
-    <section class="section">
-      <div class="label-caps">THIS WEEK</div>
-      <div class="bar-chart">
-        <div v-for="(day, i) in week" :key="day.date" class="bar-col">
-          <div class="bar-wrap">
-            <div
-              class="bar"
-              :class="barClass(day)"
-              :style="{ height: barHeight(day) + '%' }"
-            />
-          </div>
-          <span class="day-label">{{ DAY_LABELS[i] }}</span>
+  <div class="panel">
+    <!-- Sticky header -->
+    <div class="header-wrap">
+      <div class="drag-bar" data-tauri-drag-region></div>
+      <header>
+        <div class="brand">
+          <span class="eye">👁</span>
+          <strong>Blink</strong>
+          <span class="sep">·</span>
+          <span class="subtitle">Eye Health</span>
         </div>
-      </div>
-    </section>
-    <div class="divider" />
+        <button class="close-btn" @click="closePanel">×</button>
+      </header>
+      <div class="divider" />
+    </div>
 
-    <!-- This Month -->
-    <section class="section">
-      <div class="label-caps">THIS MONTH</div>
-      <div class="heatmap">
-        <span v-for="(d, i) in 'MTWTFSS'.split('')" :key="'header-' + i" class="heat-header">{{ d }}</span>
-        <div
-          v-for="(cell, i) in monthPadded"
-          :key="i"
-          class="heat-cell"
-          :class="heatClass(cell)"
-          :title="cell ? cell.date : ''"
-        />
-      </div>
-    </section>
-    <div class="divider" />
+    <!-- Scrollable body -->
+    <div class="body">
+      <!-- Today -->
+      <section class="section">
+        <div class="row-spread">
+          <span class="label-caps">TODAY</span>
+          <span class="count-text">{{ today.completed }} / {{ today.total_sessions || 8 }} sessions</span>
+        </div>
+        <div class="progress-track">
+          <div class="progress-fill" :style="{ width: today.compliance_pct + '%' }" />
+        </div>
+        <div class="note">{{ today.compliance_pct }}% compliance · {{ Math.max(0, 8 - today.total_sessions) }} remaining</div>
+      </section>
+      <div class="divider" />
 
-    <!-- Stat Cards -->
-    <section class="section cards-row">
-      <div class="stat-card">
-        <span class="card-num" style="color: var(--green)">{{ totals.completed }}</span>
-        <span class="card-label">Completed</span>
-      </div>
-      <div class="stat-card">
-        <span class="card-num" style="color: var(--blue)">{{ totals.early_exit }}</span>
-        <span class="card-label">Early Exit</span>
-      </div>
-      <div class="stat-card">
-        <span class="card-num" style="color: var(--red)">{{ totals.skipped }}</span>
-        <span class="card-label">Skipped</span>
-      </div>
-      <div class="stat-card">
-        <span class="card-num" style="color: var(--amber)">{{ totals.warn_skipped }}</span>
-        <span class="card-label">Warn Skip</span>
-      </div>
-    </section>
+      <!-- This Week -->
+      <section class="section">
+        <div class="label-caps">THIS WEEK</div>
+        <div class="bar-chart">
+          <div v-for="(day, i) in week" :key="day.date" class="bar-col">
+            <div class="bar-wrap">
+              <div
+                class="bar"
+                :class="barClass(day)"
+                :style="{ height: barHeight(day) + '%' }"
+              />
+            </div>
+            <span class="day-label">{{ DAY_LABELS[i] }}</span>
+          </div>
+        </div>
+      </section>
+      <div class="divider" />
 
-    <footer>All data stored locally · 90-day rolling window</footer>
+      <!-- This Month -->
+      <section class="section">
+        <div class="label-caps">THIS MONTH</div>
+        <div class="heatmap">
+          <span v-for="(d, i) in 'MTWTFSS'.split('')" :key="'header-' + i" class="heat-header">{{ d }}</span>
+          <div
+            v-for="(cell, i) in monthPadded"
+            :key="i"
+            class="heat-cell"
+            :class="heatClass(cell)"
+            :title="cell ? cell.date : ''"
+          />
+        </div>
+      </section>
+      <div class="divider" />
+
+      <!-- Stat Cards -->
+      <section class="section cards-row">
+        <div class="stat-card">
+          <span class="card-num green-text">{{ totals.completed }}</span>
+          <span class="card-label">Completed</span>
+        </div>
+        <div class="stat-card">
+          <span class="card-num blue-text">{{ totals.early_exit }}</span>
+          <span class="card-label">Early Exit</span>
+        </div>
+        <div class="stat-card">
+          <span class="card-num red-text">{{ totals.skipped }}</span>
+          <span class="card-label">Skipped</span>
+        </div>
+        <div class="stat-card">
+          <span class="card-num amber-text">{{ totals.warn_skipped }}</span>
+          <span class="card-label">Warn Skip</span>
+        </div>
+      </section>
+
+      <footer>All data stored locally · 90-day rolling window</footer>
+    </div>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue';
-import { getCurrentWindow } from '@tauri-apps/api/window';
+import { invoke } from '@tauri-apps/api/core';
 import { getStatsToday, getStatsWeek, getStatsMonth } from '../../composables/useBlink';
 import type { StatsToday, DayStats } from '../../types/blink';
 
@@ -156,21 +159,14 @@ const monthPadded = computed<(DayStats | null)[]>(() => {
 });
 
 async function closePanel() {
-  await getCurrentWindow().hide();
+  await invoke('close_panel');
 }
 </script>
 
 <style scoped>
-:root {
-  --green: #a6e3a1;
-  --blue: #89b4fa;
-  --red: #f38ba8;
-  --amber: #f9e2af;
-}
-
 .panel {
   width: 380px;
-  min-height: 560px;
+  height: 560px;
   background: #1e1e2e;
   color: #cdd6f4;
   font-family: Inter, 'Segoe UI', sans-serif;
@@ -179,7 +175,14 @@ async function closePanel() {
   border-radius: 14px;
   border: 1px solid rgba(255, 255, 255, 0.07);
   overflow: hidden;
+}
+
+/* Sticky header */
+.header-wrap {
+  flex-shrink: 0;
   position: relative;
+  background: #1e1e2e;
+  z-index: 10;
 }
 .drag-bar {
   position: absolute;
@@ -193,19 +196,26 @@ header {
   justify-content: space-between;
   padding: 0 20px;
   height: 52px;
-  flex-shrink: 0;
 }
 .brand { display: flex; align-items: center; gap: 5px; font-size: 14px; }
 .eye { color: #89b4fa; }
 .sep { color: #45475a; }
 .subtitle { color: #6c7086; font-size: 12px; }
 .close-btn {
+  position: relative; z-index: 1;
   background: none; border: none;
   color: #6c7086; font-size: 18px;
-  cursor: pointer; line-height: 1; padding: 0;
+  cursor: pointer; line-height: 1; padding: 4px 8px;
 }
 .close-btn:hover { color: #f38ba8; }
-.divider { height: 1px; background: rgba(255, 255, 255, 0.06); flex-shrink: 0; }
+.divider { height: 1px; background: rgba(255, 255, 255, 0.06); }
+
+/* Scrollable body */
+.body {
+  flex: 1;
+  overflow-y: auto;
+}
+
 .section { padding: 12px 20px; }
 .row-spread {
   display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;
@@ -263,9 +273,13 @@ header {
 }
 .card-num { font-size: 22px; font-weight: 700; line-height: 1; }
 .card-label { font-size: 9px; color: #6c7086; }
+.green-text { color: #a6e3a1; }
+.blue-text  { color: #89b4fa; }
+.red-text   { color: #f38ba8; }
+.amber-text { color: #f9e2af; }
 
 footer {
   text-align: center; font-size: 10px; color: #45475a;
-  padding: 10px 20px 14px; margin-top: auto;
+  padding: 10px 20px 14px;
 }
 </style>
