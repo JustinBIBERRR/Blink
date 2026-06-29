@@ -1,5 +1,6 @@
 mod capture;
 mod commands;
+mod config_store;
 mod daemon;
 mod db;
 mod hotkey;
@@ -19,7 +20,7 @@ pub fn run() {
     // Default to info-level logging unless overridden via RUST_LOG.
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
 
-    let mut config = DaemonConfig::default();
+    let mut config = config_store::load().unwrap_or_default();
 
     // Dev affordance: `BLINK_DEV_INTERVAL=5` triggers a break after 5s so the
     // overlay can be exercised without waiting 20 minutes.
@@ -147,9 +148,10 @@ pub fn run() {
             ));
 
             // No window region: the clear center is produced by the CSS gradient
-            // mask over a transparent window (Task 1). Interaction is handled by
-            // whole-window click-through (set_ignore_cursor_events on show), not by
-            // cutting the window — so the clear->blur edge stays a soft gradient.
+            // mask over a transparent window. Interaction is whole-window
+            // click-through (set_ignore_cursor_events on show). The blurred
+            // background is a SINGLE frozen frame captured at the Warning
+            // transition (above) — smooth and appropriate for a rest moment.
 
             // Hotkey listener thread
             // HotkeyManager MUST stay alive inside the thread to keep the hotkey registered.
