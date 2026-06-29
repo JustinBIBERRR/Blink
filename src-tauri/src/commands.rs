@@ -41,6 +41,9 @@ pub fn save_config(
 ) -> Result<(), String> {
     let auto_start = new_config.auto_start;
     *config.0.lock().unwrap() = new_config.clone();
-    shared.0.lock().unwrap().config = new_config;
+    shared.0.lock().unwrap().config = new_config.clone();
+    // Push the new combo to the live keyboard hook and persist to disk.
+    crate::hotkey::set_combo(crate::hotkey::parse_combo(&new_config.hotkey));
+    crate::config_store::save(&new_config)?;
     crate::startup::set_auto_start(auto_start).map_err(|e| e.to_string())
 }

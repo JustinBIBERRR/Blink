@@ -71,31 +71,107 @@ pub fn combo_matches(pressed: &HashSet<u32>, combo: &[u32]) -> bool {
     !combo.is_empty() && combo.iter().all(|k| pressed.contains(k))
 }
 
-use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState};
-use global_hotkey::hotkey::{Code, HotKey, Modifiers};
+#[cfg(target_os = "windows")]
+mod hook {
+    use super::{combo_matches, normalize_vk};
+    use std::collections::HashSet;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::mpsc::Sender;
+    use std::sync::{Mutex, OnceLock};
 
-pub struct HotkeyManager {
-    _manager: GlobalHotKeyManager,
-    pub hotkey_id: u32,
-}
+    use windows::Win32::Foundation::{HINSTANCE, LPARAM, LRESULT, WPARAM};
+    use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+    use windows::Win32::UI::WindowsAndMessaging::{
+        CallNextHookEx, GetMessageW, SetWindowsHookExW, HHOOK, KBDLLHOOKSTRUCT, MSG,
+        WH_KEYBOARD_LL, WM_KEYDOWN, WM_KEYUP, WM_SYSKEYDOWN, WM_SYSKEYUP,
+    };
 
-impl HotkeyManager {
-    pub fn new() -> Result<Self, Box<dyn std::error::Error>> {
-        let manager = GlobalHotKeyManager::new()?;
-        let hotkey = HotKey::new(
-            Some(Modifiers::CONTROL | Modifiers::SHIFT),
-            Code::Space,
-        );
-        let id = hotkey.id();
-        manager.register(hotkey)?;
-        Ok(Self { _manager: manager, hotkey_id: id })
+    static ACTIVE_COMBO: Mutex<Vec<u32>> = Mutex::new(Vec::new());
+    static ARMED: AtomicBool = AtomicBool::new(true);
+    static ESCAPE_TX: OnceLock<Sender<()>> = OnceLock::new();
+    static PRESSED: OnceLock<Mutex<HashSet<u32>>> = OnceLock::new();
+
+    fn pressed() -> &'static Mutex<HashSet<u32>> {
+        PRESSED.get_or_init(|| Mutex::new(HashSet::new()))
+    }
+
+    pub fn set_combo(combo: Vec<u32>) {
+        *ACTIVE_COMBO.lock().unwrap() = combo;
+        // Re-arm: a combo change (e.g. via save_config) may land while the old
+        // combo's keys are still held, which would otherwise leave the hook
+        // stuck un-armed until a full key-release cycle on the new combo.
+        ARMED.store(true, Ordering::Relaxed);
+    }
+
+    /// Install the global low-level keyboard hook on a dedicated message-pump
+    /// thread. `tx` receives one `()` each time the active combo is pressed.
+    pub fn install(tx: Sender<()>) {
+        let _ = ESCAPE_TX.set(tx);
+        std::thread::spawn(|| unsafe {
+            let hmod = GetModuleHandleW(None).unwrap_or_default();
+            let hook = SetWindowsHookExW(
+                WH_KEYBOARD_LL,
+                Some(keyboard_hook_proc),
+                HINSTANCE(hmod.0),
+                0,
+            );
+            if hook.is_err() {
+                log::error!("SetWindowsHookExW failed: {:?}", hook.err());
+                return;
+            }
+            // Low-level hooks require a message pump on the installing thread.
+            let mut msg = MSG::default();
+            while GetMessageW(&mut msg, None, 0, 0).as_bool() {}
+        });
+    }
+
+    unsafe extern "system" fn keyboard_hook_proc(
+        code: i32,
+        wparam: WPARAM,
+        lparam: LPARAM,
+    ) -> LRESULT {
+        if code >= 0 {
+            let kb = &*(lparam.0 as *const KBDLLHOOKSTRUCT);
+            let vk = normalize_vk(kb.vkCode);
+            match wparam.0 as u32 {
+                WM_KEYDOWN | WM_SYSKEYDOWN => {
+                    let fire = {
+                        let mut p = pressed().lock().unwrap();
+                        p.insert(vk);
+                        let combo = ACTIVE_COMBO.lock().unwrap();
+                        ARMED.load(Ordering::Relaxed) && combo_matches(&p, &combo)
+                    };
+                    if fire {
+                        ARMED.store(false, Ordering::Relaxed);
+                        if let Some(tx) = ESCAPE_TX.get() {
+                            let _ = tx.send(());
+                        }
+                    }
+                }
+                WM_KEYUP | WM_SYSKEYUP => {
+                    let mut p = pressed().lock().unwrap();
+                    p.remove(&vk);
+                    // Re-arm once any combo key is released (edge-triggered).
+                    if ACTIVE_COMBO.lock().unwrap().contains(&vk) {
+                        ARMED.store(true, Ordering::Relaxed);
+                    }
+                }
+                _ => {}
+            }
+        }
+        CallNextHookEx(HHOOK(std::ptr::null_mut()), code, wparam, lparam)
     }
 }
 
-/// Returns true if the event matches a pressed state for the given hotkey id.
-pub fn is_escape_event(event: &GlobalHotKeyEvent, id: u32) -> bool {
-    event.id == id && event.state == HotKeyState::Pressed
-}
+#[cfg(target_os = "windows")]
+pub use hook::{install, set_combo};
+
+/// Non-Windows stubs so the crate still compiles elsewhere.
+#[cfg(not(target_os = "windows"))]
+pub fn install(_tx: std::sync::mpsc::Sender<()>) {}
+
+#[cfg(not(target_os = "windows"))]
+pub fn set_combo(_combo: Vec<u32>) {}
 
 #[cfg(test)]
 mod tests {

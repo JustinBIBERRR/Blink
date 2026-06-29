@@ -56,6 +56,7 @@ pub fn run() {
 
     let db_clone = db.clone();
     let state_clone = shared_state.clone();
+    let cfg_for_hotkey = shared_config.clone();
 
     tauri::Builder::default()
         .plugin(tauri_plugin_notification::init())
@@ -153,40 +154,34 @@ pub fn run() {
             // background is a SINGLE frozen frame captured at the Warning
             // transition (above) — smooth and appropriate for a rest moment.
 
-            // Hotkey listener thread
-            // HotkeyManager MUST stay alive inside the thread to keep the hotkey registered.
-            let hotkey_mgr = hotkey::HotkeyManager::new().expect("Hotkey registration failed");
-            let hotkey_id = hotkey_mgr.hotkey_id;
+            // Global escape combo via low-level keyboard hook (hotkey.rs).
+            let (esc_tx, esc_rx) = std::sync::mpsc::channel::<()>();
+            hotkey::install(esc_tx);
+            hotkey::set_combo(hotkey::parse_combo(
+                &cfg_for_hotkey.lock().unwrap().hotkey,
+            ));
+
             let app_handle2 = app.handle().clone();
             let state_for_hotkey = state_clone.clone();
             let db_for_hotkey = db_clone.clone();
             std::thread::spawn(move || {
-                // Move hotkey_mgr into the thread so it stays alive as long as this thread runs.
-                let _hotkey_mgr = hotkey_mgr;
-                let receiver = global_hotkey::GlobalHotKeyEvent::receiver();
-                loop {
-                    if let Ok(event) = receiver.try_recv() {
-                        if hotkey::is_escape_event(&event, hotkey_id) {
-                            let outcome = {
-                                let mut s = state_for_hotkey.lock().unwrap();
-                                if matches!(s.phase, Phase::Monitoring | Phase::Dissolving) {
-                                    // Nothing to escape in these phases
-                                    continue;
-                                }
-                                let outcome = daemon::escape_outcome(&s.phase);
-                                s.transition_to(Phase::Monitoring);
-                                outcome
-                            };
-                            if let Ok(db) = db_for_hotkey.lock() {
-                                db.record_session(&outcome).ok();
-                            }
-                            let _ = app_handle2.emit("blink://phase", Phase::Monitoring);
-                            if let Some(overlay) = app_handle2.get_webview_window("overlay") {
-                                let _ = overlay.hide();
-                            }
+                while esc_rx.recv().is_ok() {
+                    let outcome = {
+                        let mut s = state_for_hotkey.lock().unwrap();
+                        if matches!(s.phase, Phase::Monitoring | Phase::Dissolving) {
+                            continue; // nothing to escape in these phases
                         }
+                        let outcome = daemon::escape_outcome(&s.phase);
+                        s.transition_to(Phase::Monitoring);
+                        outcome
+                    };
+                    if let Ok(db) = db_for_hotkey.lock() {
+                        db.record_session(&outcome).ok();
                     }
-                    std::thread::sleep(std::time::Duration::from_millis(50));
+                    let _ = app_handle2.emit("blink://phase", Phase::Monitoring);
+                    if let Some(overlay) = app_handle2.get_webview_window("overlay") {
+                        let _ = overlay.hide();
+                    }
                 }
             });
 
