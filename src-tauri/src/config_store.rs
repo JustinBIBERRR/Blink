@@ -20,7 +20,10 @@ pub fn save(config: &DaemonConfig) -> Result<(), String> {
 
 fn load_from(path: &PathBuf) -> Option<DaemonConfig> {
     let data = std::fs::read_to_string(path).ok()?;
-    match serde_json::from_str::<DaemonConfig>(&data) {
+    // Tolerate a leading UTF-8 BOM (Windows editors like Notepad add one), which
+    // serde_json otherwise rejects with "expected value at line 1 column 1".
+    let data = data.strip_prefix('\u{feff}').unwrap_or(&data);
+    match serde_json::from_str::<DaemonConfig>(data) {
         Ok(cfg) => Some(cfg),
         Err(e) => {
             log::warn!("config.json parse failed, using defaults: {e}");
@@ -58,6 +61,18 @@ mod tests {
     fn load_from_missing_file_is_none() {
         let path = PathBuf::from("definitely/does/not/exist/config.json");
         assert!(load_from(&path).is_none());
+    }
+
+    #[test]
+    fn load_from_tolerates_utf8_bom() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        let mut cfg = DaemonConfig::default();
+        cfg.hotkey = "ctrl+shift+esc".to_string();
+        let json = serde_json::to_string_pretty(&cfg).unwrap();
+        std::fs::write(&path, format!("\u{feff}{json}")).unwrap();
+        let loaded = load_from(&path).expect("BOM-prefixed config should still load");
+        assert_eq!(loaded.hotkey, "ctrl+shift+esc");
     }
 
     #[test]
