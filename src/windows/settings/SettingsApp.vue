@@ -55,11 +55,21 @@
       <section class="section">
         <div class="label-caps">ESCAPE HOTKEY</div>
         <div class="card">
-          <p class="field-label" style="margin-bottom:8px">Skip intervention at any time</p>
+          <p class="field-label" style="margin-bottom:8px">
+            Skip intervention · double-click a box to edit, leave empty to remove
+          </p>
           <div class="keys-row">
-            <kbd>Ctrl</kbd><span class="plus">+</span>
-            <kbd>Shift</kbd><span class="plus">+</span>
-            <kbd>Space</kbd>
+            <template v-for="(slot, i) in slots" :key="i">
+              <span v-if="i > 0" class="plus">+</span>
+              <kbd
+                class="key-box"
+                :class="{ editing: editingIndex === i, empty: !slot && editingIndex !== i }"
+                tabindex="0"
+                @dblclick="startEdit(i, $event)"
+                @keydown="onKeyCapture($event, i)"
+                @blur="stopEdit(i)"
+              >{{ editingIndex === i ? '…' : (slot ? keyLabel(slot) : '—') }}</kbd>
+            </template>
           </div>
         </div>
       </section>
@@ -132,6 +142,63 @@ const config = reactive<DaemonConfig>({
 const intervalMinutes = computed(() => Math.round(config.interval_secs / 60));
 const saveFlash = ref(false);
 
+// --- Hotkey editing: 3 positional slots, each a token or '' (removed) ---
+const slots = reactive<string[]>(['', '', '']);
+const editingIndex = ref<number | null>(null);
+
+const KEY_LABELS: Record<string, string> = {
+  ctrl: 'Ctrl', shift: 'Shift', alt: 'Alt', win: 'Win', space: 'Space',
+  esc: 'Esc', enter: 'Enter', tab: 'Tab', left: '←', right: '→', up: '↑', down: '↓',
+};
+function keyLabel(tok: string): string {
+  return KEY_LABELS[tok] ?? tok.toUpperCase();
+}
+
+// Physical key (event.code) -> our token. Layout-independent.
+function codeToToken(code: string): string | null {
+  if (code === 'ControlLeft' || code === 'ControlRight') return 'ctrl';
+  if (code === 'ShiftLeft' || code === 'ShiftRight') return 'shift';
+  if (code === 'AltLeft' || code === 'AltRight') return 'alt';
+  if (code === 'MetaLeft' || code === 'MetaRight') return 'win';
+  if (code === 'Space') return 'space';
+  if (code === 'Escape') return 'esc';
+  if (code === 'Enter') return 'enter';
+  if (code === 'Tab') return 'tab';
+  if (code === 'ArrowLeft') return 'left';
+  if (code === 'ArrowRight') return 'right';
+  if (code === 'ArrowUp') return 'up';
+  if (code === 'ArrowDown') return 'down';
+  if (/^Key[A-Z]$/.test(code)) return code.slice(3).toLowerCase();
+  if (/^Digit[0-9]$/.test(code)) return code.slice(5);
+  if (/^F([1-9]|1[0-2])$/.test(code)) return code.toLowerCase();
+  return null;
+}
+
+function startEdit(i: number, e: MouseEvent) {
+  editingIndex.value = i;
+  slots[i] = ''; // clear while waiting for input
+  (e.currentTarget as HTMLElement).focus();
+}
+function stopEdit(i: number) {
+  // Blur with nothing captured leaves the slot empty (= key removed).
+  if (editingIndex.value === i) editingIndex.value = null;
+}
+function onKeyCapture(e: KeyboardEvent, i: number) {
+  if (editingIndex.value !== i) return;
+  e.preventDefault();
+  const tok = codeToToken(e.code);
+  if (tok) slots[i] = tok;
+  editingIndex.value = null;
+  (e.target as HTMLElement).blur();
+}
+
+function loadSlotsFromConfig() {
+  const parts = (config.hotkey || '').split('+').map((s) => s.trim()).filter(Boolean);
+  slots[0] = parts[0] ?? '';
+  slots[1] = parts[1] ?? '';
+  slots[2] = parts[2] ?? '';
+}
+
 // --- Pause state ---
 const PAUSE_OPTS = [
   { label: '1 Hour', secs: 3600 },
@@ -189,6 +256,7 @@ async function resume() {
 onMounted(async () => {
   const remote = await getConfig();
   Object.assign(config, remote);
+  loadSlotsFromConfig();
   loadPauseState();
   ticker = setInterval(() => { now.value = Date.now(); }, 1000);
 });
@@ -196,6 +264,7 @@ onMounted(async () => {
 onUnmounted(() => clearInterval(ticker));
 
 async function save() {
+  config.hotkey = slots.filter(Boolean).join('+');
   await saveConfig({ ...config });
   saveFlash.value = true;
   setTimeout(() => { saveFlash.value = false; }, 2000);
@@ -281,6 +350,20 @@ kbd {
   border-radius: 4px; padding: 3px 8px;
   font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #cdd6f4;
 }
+.key-box {
+  cursor: pointer;
+  min-width: 34px;
+  text-align: center;
+  outline: none;
+  user-select: none;
+}
+.key-box:hover { border-color: rgba(137, 180, 250, 0.5); }
+.key-box.editing {
+  border-color: #89b4fa;
+  color: #89b4fa;
+  box-shadow: 0 0 0 2px rgba(137, 180, 250, 0.25);
+}
+.key-box.empty { color: #45475a; border-style: dashed; }
 .plus { color: #45475a; font-size: 12px; }
 
 /* Pause */
