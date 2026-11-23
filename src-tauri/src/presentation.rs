@@ -71,7 +71,9 @@ pub fn ensure_windows(app: &tauri::AppHandle) -> tauri::Result<()> {
         control.set_size(tauri::PhysicalSize::new(width, size))?;
         control.set_position(tauri::PhysicalPosition::new(
             monitor.position().x + monitor.size().width as i32 - width as i32 - margin,
-            monitor.position().y + monitor.size().height as i32 - size as i32 - margin,
+            // Keep the shared eraser/close controls below the macOS menu bar
+            // and away from the Dock at the bottom of the display.
+            monitor.position().y + (64.0 * monitor.scale_factor()) as i32,
         ))?;
         #[cfg(target_os = "macos")]
         {
