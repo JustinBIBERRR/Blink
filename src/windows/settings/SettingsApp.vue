@@ -35,19 +35,12 @@
         </div>
       </section>
 
-      <!-- Intervention Duration (locked) -->
       <section class="section">
-        <div class="label-caps">INTERVENTION DURATION</div>
+        <div class="label-caps">柔和休息提示</div>
         <div class="card">
-          <div class="locked-row">
-            <span class="field-dim">Blur spreading</span>
-            <span class="locked-val">20s 🔒</span>
-          </div>
-          <div class="locked-row mt4">
-            <span class="field-dim">Blur holding</span>
-            <span class="locked-val">20s 🔒</span>
-          </div>
-          <p class="note">Fixed — 20-20-20 standard · not adjustable</p>
+          <p class="field-label">屏幕外缘冷光轻亮约 3 秒，随后自动淡出。</p>
+          <button class="pill-btn" @click="preview">立即试一次</button>
+          <p v-if="previewError" role="alert">{{ previewError }}</p>
         </div>
       </section>
 
@@ -141,6 +134,12 @@ const config = reactive<DaemonConfig>({
 
 const intervalMinutes = computed(() => Math.round(config.interval_secs / 60));
 const saveFlash = ref(false);
+const previewError = ref('');
+async function preview() {
+  previewError.value = '';
+  try { await invoke('preview_reminder'); }
+  catch (error) { previewError.value = String(error); }
+}
 
 // --- Hotkey editing: 3 positional slots, each a token or '' (removed) ---
 const slots = reactive<string[]>(['', '', '']);
