@@ -3,6 +3,7 @@ name: build-windows
 on:
   push:
     branches: [develop]
+  pull_request:
   workflow_dispatch:
 
 jobs:
@@ -33,6 +34,18 @@ jobs:
 
       - name: Install frontend dependencies
         run: npm ci
+
+      - name: Check Rust formatting
+        run: cargo fmt --manifest-path src-tauri/Cargo.toml --check
+
+      - name: Test reminder, system and storage behavior
+        run: cargo test --manifest-path src-tauri/Cargo.toml --lib
+
+      - name: Test native input callbacks in isolation
+        run: cargo test --manifest-path src-tauri/Cargo.toml native_ --lib -- --ignored --test-threads=1
+
+      - name: Typecheck and build frontend
+        run: npm run build
 
       - name: Build Tauri app (NSIS .exe + MSI)
         run: npm run tauri build -- --bundles nsis msi
