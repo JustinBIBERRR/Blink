@@ -23,14 +23,12 @@ impl SilenceChecker {
     #[cfg(target_os = "windows")]
     fn check_notification_state(&self) -> bool {
         use windows::Win32::UI::Shell::{
-            SHQueryUserNotificationState, QUNS_PRESENTATION_MODE,
-            QUNS_RUNNING_D3D_FULL_SCREEN,
+            SHQueryUserNotificationState, QUNS_PRESENTATION_MODE, QUNS_RUNNING_D3D_FULL_SCREEN,
         };
         unsafe {
             match SHQueryUserNotificationState() {
                 Ok(state) => {
-                    state == QUNS_RUNNING_D3D_FULL_SCREEN
-                        || state == QUNS_PRESENTATION_MODE
+                    state == QUNS_RUNNING_D3D_FULL_SCREEN || state == QUNS_PRESENTATION_MODE
                 }
                 Err(_) => false,
             }
@@ -99,11 +97,11 @@ impl SilenceChecker {
                 Ok(d) => d,
                 Err(_) => return false,
             };
-            let meter: IAudioMeterInformation =
-                match device.Activate(CLSCTX(1 | 2 | 4 | 16), None) {
-                    Ok(m) => m,
-                    Err(_) => return false,
-                };
+            let meter: IAudioMeterInformation = match device.Activate(CLSCTX(1 | 2 | 4 | 16), None)
+            {
+                Ok(m) => m,
+                Err(_) => return false,
+            };
             match meter.GetPeakValue() {
                 Ok(peak) => peak > 0.01,
                 Err(_) => false,

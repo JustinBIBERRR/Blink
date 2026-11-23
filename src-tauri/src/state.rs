@@ -73,7 +73,6 @@ impl DaemonState {
         self.phase = phase;
         self.phase_start = Instant::now();
     }
-
 }
 
 /// Desired window region for the overlay this instant.
@@ -119,7 +118,11 @@ pub fn hole_for(phase: &Phase, elapsed: f64, cfg: &DaemonConfig) -> OverlayHole 
 impl DaemonState {
     /// Hole for the current phase and elapsed time.
     pub fn overlay_hole(&self) -> OverlayHole {
-        hole_for(&self.phase, self.phase_start.elapsed().as_secs_f64(), &self.config)
+        hole_for(
+            &self.phase,
+            self.phase_start.elapsed().as_secs_f64(),
+            &self.config,
+        )
     }
 }
 
@@ -182,7 +185,15 @@ mod tests {
     fn hole_reopens_over_dissolving() {
         let cfg = DaemonConfig::default();
         assert!(frac(hole_for(&Phase::Dissolving, 0.0, &cfg)).abs() < 1e-9);
-        assert!((frac(hole_for(&Phase::Dissolving, cfg.dissolving_secs as f64, &cfg)) - 0.92).abs() < 1e-9);
+        assert!(
+            (frac(hole_for(
+                &Phase::Dissolving,
+                cfg.dissolving_secs as f64,
+                &cfg
+            )) - 0.92)
+                .abs()
+                < 1e-9
+        );
     }
 
     #[test]
