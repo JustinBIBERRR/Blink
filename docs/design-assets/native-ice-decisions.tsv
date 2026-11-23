@@ -1,0 +1,10 @@
+ts	phase	decision	why	evidence	result
+2026-11-23T11:32:33Z	design	Build an isolated native live ice lab with monitoring	Keep capture and GPU lifetime under one owner while visual acceptance is pending	docs/design-assets/native-ice-plan.md	open
+2026-11-23T11:40:23Z	verify	Synthetic lifecycle test passed 13 independent checks	Prove work executed and stop released session resources before testing live capture	/private/tmp/blink-ice-lab-self-test.jsonl	VERIFIED
+2026-11-23T11:40:23Z	review	Fix pending capture startup, failed cleanup ownership and interpolated contact timestamps	Review found races and instant-thaw edges despite a passing synthetic run	dev/native-ice/IceLab.swift	open
+2026-11-23T11:40:23Z	visual	Reduce central blur after native visual inspection	Heading and body were more blurred than reference C	dev/native-ice/Ice.metal	open
+2026-11-23T11:40:23Z	live	Requested user permission for the separate laboratory app	ScreenCaptureKit live test cannot start without OS screen recording authorization	/private/tmp/blink-ice-lab-1795433853.jsonl	NOT VERIFIED
+2026-11-23T11:42:02Z	verify	Fixed lifecycle run passes all 13 independent checks and delayed-start restart assertions	New evidence covers review fixes without claiming live capture acceptance	docs/design-assets/native-ice-evidence/checks.txt	VERIFIED
+2026-11-23T11:51:00Z	permission	Actual capture remains denied with TCC code requirement mismatch	System logs show stored old cdhash differs from current signed binary despite enabled UI toggle	docs/design-assets/native-ice-evidence/README.md	NOT VERIFIED
+2026-11-23T11:51:00Z	reference	Inspect user AE preview for directional crystal growth and refraction	Reference adds a concrete material gap without changing current tested binary	docs/design-assets/ae-ice-reference.md	observed
+2026-11-23T11:54:10Z	live	Current binary authorized; actual live render, wipe, dissolve and stop verified	ScreenCaptureKit frames and native inspection now replace the prior permission-blocked result	docs/design-assets/native-ice-evidence/live-checks.txt	VERIFIED
