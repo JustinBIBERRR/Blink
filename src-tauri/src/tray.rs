@@ -1,6 +1,6 @@
+use tauri::{AppHandle, Emitter, Manager};
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::tray::TrayIconBuilder;
-use tauri::{AppHandle, Emitter, Manager};
 
 pub fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
     let report = MenuItem::with_id(app, "report", "📊  View Report", true, None::<&str>)?;
@@ -21,7 +21,14 @@ pub fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
     let sep2 = PredefinedMenuItem::separator(app)?;
     let quit = MenuItem::with_id(app, "quit", "✕  Quit Blink", true, None::<&str>)?;
 
-    let menu = Menu::with_items(app, &[&report, &settings, &sep1, &pause_sub, &sep2, &quit])?;
+    let menu = Menu::with_items(app, &[
+        &report,
+        &settings,
+        &sep1,
+        &pause_sub,
+        &sep2,
+        &quit,
+    ])?;
 
     TrayIconBuilder::new()
         .icon(app.default_window_icon().unwrap().clone())
@@ -64,9 +71,12 @@ fn secs_until_midnight() -> u64 {
     use chrono::Local;
     let now = Local::now();
     let tomorrow = now.date_naive().succ_opt().unwrap_or(now.date_naive());
-    let midnight =
-        chrono::NaiveDateTime::new(tomorrow, chrono::NaiveTime::from_hms_opt(0, 0, 0).unwrap());
-    let midnight_local = chrono::TimeZone::from_local_datetime(&Local, &midnight).unwrap();
+    let midnight = chrono::NaiveDateTime::new(
+        tomorrow,
+        chrono::NaiveTime::from_hms_opt(0, 0, 0).unwrap(),
+    );
+    let midnight_local = chrono::TimeZone::from_local_datetime(&Local, &midnight)
+        .unwrap();
     let secs = (midnight_local - now).num_seconds().max(0) as u64;
     secs
 }

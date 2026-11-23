@@ -20,8 +20,18 @@ pub enum SessionOutcome {
     WarnSkipped,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReminderMode {
+    #[default]
+    Soft,
+    Fog,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DaemonConfig {
+    #[serde(default)]
+    pub reminder_mode: ReminderMode,
     pub interval_secs: u64,
     pub warning_secs: u64,
     pub spreading_secs: u64,
@@ -34,6 +44,7 @@ pub struct DaemonConfig {
 impl Default for DaemonConfig {
     fn default() -> Self {
         Self {
+            reminder_mode: ReminderMode::Soft,
             interval_secs: 1200,
             warning_secs: 5,
             spreading_secs: 20,

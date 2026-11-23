@@ -1,5 +1,5 @@
 //! Reminder lifecycle. All callers supply monotonic time; windows never own it.
-use crate::state::{DaemonConfig, Phase, SessionOutcome};
+use crate::state::{DaemonConfig, Phase, ReminderMode, SessionOutcome};
 use serde::Serialize;
 use std::time::{Duration, Instant};
 
@@ -11,6 +11,7 @@ pub struct ReminderSnapshot {
     pub round_id: Option<u64>,
     pub phase: Phase,
     pub elapsed_ms: u64,
+    pub mode: ReminderMode,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -30,7 +31,7 @@ pub struct Scheduler {
     next_due: Instant,
     paused_until: Option<Instant>,
     pub is_silenced: bool,
-    active: Option<(u64, Instant)>,
+    active: Option<(u64, Instant, ReminderMode)>,
 }
 
 impl Scheduler {
@@ -84,7 +85,7 @@ impl Scheduler {
             SystemEvent::Sleeping(value) => self.sleeping = value,
         }
         if self.locked || self.sleeping {
-            if let Some((id, _)) = self.active {
+            if let Some((id, _, _)) = self.active {
                 self.finish(id, now);
             } else {
                 self.generation += 1;
@@ -107,7 +108,7 @@ impl Scheduler {
         }
 
         self.generation += 1;
-        self.active = Some((self.generation, now));
+        self.active = Some((self.generation, now, self.config.reminder_mode));
         self.next_due = now + Duration::from_secs(self.config.interval_secs);
         self.generation
     }
@@ -115,10 +116,14 @@ impl Scheduler {
     pub fn tick(&mut self, now: Instant) -> Option<SessionOutcome> {
         self.advance_clock(now);
         let mut outcome = None;
-        if self
-            .active
-            .is_some_and(|(_, start)| now.saturating_duration_since(start) >= SOFT_DURATION)
-        {
+        if self.active.is_some_and(|(_, start, mode)| {
+            now.saturating_duration_since(start)
+                >= if mode == ReminderMode::Fog {
+                    Duration::from_secs(23)
+                } else {
+                    SOFT_DURATION
+                }
+        }) {
             self.active = None;
             self.generation += 1;
             outcome = Some(SessionOutcome::Completed);
@@ -146,7 +151,7 @@ impl Scheduler {
     }
 
     pub fn pause(&mut self, seconds: u64, now: Instant) {
-        if let Some((id, _)) = self.active {
+        if let Some((id, _, _)) = self.active {
             self.finish(id, now);
         }
         self.paused_until = if seconds == 0 {
@@ -158,7 +163,7 @@ impl Scheduler {
     }
 
     pub fn finish(&mut self, round_id: u64, _now: Instant) -> bool {
-        if self.active.map(|(id, _)| id) != Some(round_id) {
+        if self.active.map(|(id, _, _)| id) != Some(round_id) {
             return false;
         }
         self.active = None;
@@ -169,15 +174,28 @@ impl Scheduler {
     pub fn snapshot(&self, now: Instant) -> ReminderSnapshot {
         ReminderSnapshot {
             generation: self.generation,
-            round_id: self.active.map(|(id, _)| id),
-            phase: if self.active.is_some() {
-                Phase::Warning
+            round_id: self.active.map(|(id, _, _)| id),
+            mode: self
+                .active
+                .map(|(_, _, mode)| mode)
+                .unwrap_or(self.config.reminder_mode),
+            phase: if let Some((_, start, mode)) = self.active {
+                let elapsed = now.saturating_duration_since(start).as_secs_f64();
+                if mode == ReminderMode::Soft || elapsed < 3.0 {
+                    Phase::Warning
+                } else if elapsed < 8.0 {
+                    Phase::Spreading
+                } else if elapsed < 20.0 {
+                    Phase::Holding
+                } else {
+                    Phase::Dissolving
+                }
             } else {
                 Phase::Monitoring
             },
             elapsed_ms: self
                 .active
-                .map(|(_, start)| now.saturating_duration_since(start).as_millis() as u64)
+                .map(|(_, start, _)| now.saturating_duration_since(start).as_millis() as u64)
                 .unwrap_or(0),
         }
     }
@@ -230,6 +248,57 @@ mod tests {
         assert_eq!(scheduler.snapshot(now).round_id, None);
         scheduler.tick(now + Duration::from_secs(3931));
         assert!(scheduler.snapshot(now).round_id.is_some());
+    }
+
+    #[test]
+    fn closing_fog_ends_current_round_and_rejects_delayed_close() {
+        let now = Instant::now();
+        let mut config = DaemonConfig::default();
+        config.reminder_mode = ReminderMode::Fog;
+        let mut scheduler = Scheduler::new(config, now);
+        let first = scheduler.preview(now);
+        // Saving another mode must not change a round already on screen.
+        scheduler.config.reminder_mode = ReminderMode::Soft;
+        assert_eq!(
+            scheduler.snapshot(now + Duration::from_secs(5)).phase,
+            Phase::Spreading
+        );
+        assert!(scheduler.finish(first, now + Duration::from_secs(5)));
+        assert_eq!(scheduler.snapshot(now).round_id, None);
+        assert_eq!(scheduler.tick(now + Duration::from_secs(23)), None);
+        let next = scheduler.preview(now + Duration::from_secs(24));
+        assert!(!scheduler.finish(first, now + Duration::from_secs(25)));
+        assert_eq!(scheduler.snapshot(now).round_id, Some(next));
+    }
+
+    #[test]
+    fn selected_fog_previews_three_second_cue_and_twenty_second_fog() {
+        let now = Instant::now();
+        let mut config = DaemonConfig::default();
+        config.reminder_mode = crate::state::ReminderMode::Fog;
+        let mut scheduler = Scheduler::new(config, now);
+        let id = scheduler.preview(now);
+        assert_eq!(
+            scheduler.snapshot(now + Duration::from_millis(2999)).phase,
+            Phase::Warning
+        );
+        scheduler.tick(now + Duration::from_secs(3));
+        assert_eq!(
+            scheduler.snapshot(now + Duration::from_secs(3)).phase,
+            Phase::Spreading
+        );
+        scheduler.tick(now + Duration::from_secs(20));
+        assert_eq!(
+            scheduler.snapshot(now + Duration::from_secs(20)).phase,
+            Phase::Dissolving
+        );
+        assert_eq!(scheduler.snapshot(now).round_id, Some(id));
+        assert_eq!(
+            scheduler.tick(now + Duration::from_secs(23)),
+            Some(SessionOutcome::Completed)
+        );
+        assert!(!scheduler.finish(id, now + Duration::from_secs(24)));
+        assert_eq!(scheduler.snapshot(now).round_id, None);
     }
 
     #[test]

@@ -148,13 +148,7 @@ mod hook {
                     let down: HashSet<u32> = combo
                         .iter()
                         .copied()
-                        .filter(|&vk| {
-                            if vk == changed {
-                                changed_down
-                            } else {
-                                async_down(vk)
-                            }
-                        })
+                        .filter(|&vk| if vk == changed { changed_down } else { async_down(vk) })
                         .collect();
                     if combo_matches(&down, &combo) {
                         // Edge-trigger: fire once per press, re-arm when the combo
@@ -247,7 +241,7 @@ mod tests {
         assert!(combo_matches(&pressed, &[0x70]));
         assert!(!combo_matches(&pressed, &[0x70, 0x11])); // Ctrl not pressed
         assert!(!combo_matches(&pressed, &[])); // empty combo never matches
-                                                // Subset semantics: extra held keys do not prevent a match.
+        // Subset semantics: extra held keys do not prevent a match.
         pressed.insert(0x11u32); // Ctrl also held
         assert!(combo_matches(&pressed, &[0x70, 0x20]));
     }

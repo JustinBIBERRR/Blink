@@ -45,16 +45,29 @@ mod tests {
     use super::*;
 
     #[test]
+    fn existing_config_without_mode_uses_soft_reminder() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        std::fs::write(&path, r#"{"interval_secs":1200,"warning_secs":5,"spreading_secs":20,"holding_secs":20,"dissolving_secs":10,"hotkey":"","auto_start":false}"#).unwrap();
+        assert_eq!(
+            load_from(&path).unwrap().reminder_mode,
+            crate::state::ReminderMode::Soft
+        );
+    }
+
+    #[test]
     fn save_then_load_roundtrips() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("config.json");
         let mut cfg = DaemonConfig::default();
         cfg.hotkey = "f1+space".to_string();
         cfg.interval_secs = 999;
+        cfg.reminder_mode = crate::state::ReminderMode::Fog;
         save_to(&path, &cfg).unwrap();
         let loaded = load_from(&path).unwrap();
         assert_eq!(loaded.hotkey, "f1+space");
         assert_eq!(loaded.interval_secs, 999);
+        assert_eq!(loaded.reminder_mode, crate::state::ReminderMode::Fog);
     }
 
     #[test]
