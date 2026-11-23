@@ -30,15 +30,27 @@ pub enum ReminderMode {
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum EraserModifier { Ctrl, Shift, Alt, Meta }
+pub enum EraserModifier {
+    Ctrl,
+    Shift,
+    Alt,
+    Meta,
+}
 impl EraserModifier {
     pub fn key(self) -> u32 {
-        match self { Self::Ctrl => 0x11, Self::Shift => 0x10, Self::Alt => 0x12, Self::Meta => 0x5B }
+        match self {
+            Self::Ctrl => 0x11,
+            Self::Shift => 0x10,
+            Self::Alt => 0x12,
+            Self::Meta => 0x5B,
+        }
     }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DaemonConfig {
+    #[serde(default = "enabled")]
+    pub fog_notifications: bool,
     #[serde(default)]
     pub reminder_mode: ReminderMode,
     #[serde(default)]
@@ -55,9 +67,14 @@ pub struct DaemonConfig {
     pub auto_start: bool,
 }
 
+fn enabled() -> bool {
+    true
+}
+
 impl Default for DaemonConfig {
     fn default() -> Self {
         Self {
+            fog_notifications: true,
             reminder_mode: ReminderMode::Soft,
             eraser_enabled: false,
             eraser_modifier: None,

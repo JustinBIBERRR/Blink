@@ -141,10 +141,14 @@ mod hook {
                 let changed = normalize_vk(kb.vkCode);
                 let changed_down = matches!(msg, WM_KEYDOWN | WM_SYSKEYDOWN)
                     || match kb.vkCode {
-                        0xA0 => async_down(0xA1), 0xA1 => async_down(0xA0),
-                        0xA2 => async_down(0xA3), 0xA3 => async_down(0xA2),
-                        0xA4 => async_down(0xA5), 0xA5 => async_down(0xA4),
-                        0x5B => async_down(0x5C), 0x5C => async_down(0x5B),
+                        0xA0 => async_down(0xA1),
+                        0xA1 => async_down(0xA0),
+                        0xA2 => async_down(0xA3),
+                        0xA3 => async_down(0xA2),
+                        0xA4 => async_down(0xA5),
+                        0xA5 => async_down(0xA4),
+                        0x5B => async_down(0x5C),
+                        0x5C => async_down(0x5B),
                         _ => false,
                     };
                 if matches!(changed, 0x10 | 0x11 | 0x12 | 0x5B) {
@@ -158,7 +162,13 @@ mod hook {
                     let down: HashSet<u32> = combo
                         .iter()
                         .copied()
-                        .filter(|&vk| if vk == changed { changed_down } else { async_down(vk) })
+                        .filter(|&vk| {
+                            if vk == changed {
+                                changed_down
+                            } else {
+                                async_down(vk)
+                            }
+                        })
                         .collect();
                     if combo_matches(&down, &combo) {
                         // Edge-trigger: fire once per press, re-arm when the combo
@@ -166,7 +176,10 @@ mod hook {
                         if ARMED.swap(false, Ordering::Relaxed) {
                             if let Some(tx) = ESCAPE_TX.get() {
                                 let round = crate::eraser_input::current_round();
-                                if round != 0 { crate::eraser_input::capture(None); let _ = tx.send(round); }
+                                if round != 0 {
+                                    crate::eraser_input::capture(None);
+                                    let _ = tx.send(round);
+                                }
                             }
                         }
                     } else {
@@ -185,11 +198,13 @@ pub use hook::{install, set_combo};
 #[cfg(target_os = "macos")]
 mod mac {
     use super::*;
-    use std::sync::{Mutex, OnceLock, mpsc::Sender};
+    use std::sync::{mpsc::Sender, Mutex, OnceLock};
     static TX: OnceLock<Sender<u64>> = OnceLock::new();
     static COMBO: Mutex<Vec<u32>> = Mutex::new(Vec::new());
     static KEYS: Mutex<Option<(HashSet<u32>, bool)>> = Mutex::new(None);
-    pub fn install(tx: Sender<u64>) { let _ = TX.set(tx); }
+    pub fn install(tx: Sender<u64>) {
+        let _ = TX.set(tx);
+    }
     pub fn set_combo(combo: Vec<u32>) {
         *COMBO.lock().unwrap() = combo;
         *KEYS.lock().unwrap() = None;
@@ -198,22 +213,39 @@ mod mac {
     pub extern "C" fn blink_keyboard_event(key: u32, down: bool, flags: u32) {
         let combo = COMBO.lock().unwrap();
         let mut state = KEYS.lock().unwrap();
-        if key == u32::MAX { *state = None; return; }
-        let (pressed, armed) = state.get_or_insert_with(|| (HashSet::new(), true));
-        for (bit, vk) in [(1,0x11), (2,0x10), (4,0x12), (8,0x5B)] {
-            if flags & bit != 0 { pressed.insert(vk); } else { pressed.remove(&vk); }
+        if key == u32::MAX {
+            *state = None;
+            return;
         }
-        if key != 0 { if down { pressed.insert(key); } else { pressed.remove(&key); } }
+        let (pressed, armed) = state.get_or_insert_with(|| (HashSet::new(), true));
+        for (bit, vk) in [(1, 0x11), (2, 0x10), (4, 0x12), (8, 0x5B)] {
+            if flags & bit != 0 {
+                pressed.insert(vk);
+            } else {
+                pressed.remove(&vk);
+            }
+        }
+        if key != 0 {
+            if down {
+                pressed.insert(key);
+            } else {
+                pressed.remove(&key);
+            }
+        }
         if combo_matches(pressed, &combo) {
             if *armed {
                 let round = crate::eraser_input::current_round();
                 if round != 0 {
                     crate::eraser_input::capture(None);
-                    if let Some(tx) = TX.get() { let _ = tx.send(round); }
+                    if let Some(tx) = TX.get() {
+                        let _ = tx.send(round);
+                    }
                 }
             }
             *armed = false;
-        } else { *armed = true; }
+        } else {
+            *armed = true;
+        }
     }
 }
 #[cfg(target_os = "macos")]
@@ -227,6 +259,28 @@ pub fn set_combo(_combo: Vec<u32>) {}
 mod tests {
     use super::*;
     use std::collections::HashSet;
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    #[ignore = "native singleton state: run with --ignored --test-threads=1"]
+    fn native_keyboard_close_is_opt_in_edge_triggered_and_round_scoped() {
+        let (tx, rx) = std::sync::mpsc::channel();
+        install(tx);
+        crate::eraser_input::active_round(Some(81));
+        set_combo(Vec::new());
+        mac::blink_keyboard_event(0x20, true, 1);
+        assert!(rx.try_recv().is_err());
+        set_combo(parse_combo("ctrl+space"));
+        mac::blink_keyboard_event(0x20, true, 1);
+        assert_eq!(rx.try_recv().unwrap(), 81);
+        mac::blink_keyboard_event(0x20, true, 1);
+        assert!(rx.try_recv().is_err());
+        mac::blink_keyboard_event(0x20, false, 1);
+        crate::eraser_input::active_round(None);
+        mac::blink_keyboard_event(0x20, true, 1);
+        assert!(rx.try_recv().is_err());
+        set_combo(Vec::new());
+    }
 
     #[test]
     fn token_to_vk_known_keys() {
@@ -286,7 +340,7 @@ mod tests {
         assert!(combo_matches(&pressed, &[0x70]));
         assert!(!combo_matches(&pressed, &[0x70, 0x11])); // Ctrl not pressed
         assert!(!combo_matches(&pressed, &[])); // empty combo never matches
-        // Subset semantics: extra held keys do not prevent a match.
+                                                // Subset semantics: extra held keys do not prevent a match.
         pressed.insert(0x11u32); // Ctrl also held
         assert!(combo_matches(&pressed, &[0x70, 0x20]));
     }

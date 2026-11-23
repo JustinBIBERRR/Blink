@@ -33,6 +33,7 @@ pub struct EraserSnapshot {
 }
 
 pub struct Scheduler {
+    notifications: Vec<&'static str>,
     eraser: EraserSnapshot,
     eraser_last: Option<[f64; 2]>,
     temporary_eraser: bool,
@@ -54,6 +55,7 @@ pub struct Scheduler {
 impl Scheduler {
     pub fn new(config: DaemonConfig, now: Instant) -> Self {
         Self {
+            notifications: Vec::new(),
             eraser: EraserSnapshot {
                 radius: 38.0,
                 ..Default::default()
@@ -76,6 +78,11 @@ impl Scheduler {
         }
     }
 
+    /// Drain native submissions once, independently of per-monitor rendering.
+    pub fn take_notifications(&mut self) -> Vec<&'static str> {
+        std::mem::take(&mut self.notifications)
+    }
+
     /// Idle input controls display eligibility, never accumulated use time.
     pub fn idle_for(&mut self, idle: Duration, now: Instant) {
         if idle >= Duration::from_secs(300) {
@@ -94,7 +101,9 @@ impl Scheduler {
             self.next_due = now + Duration::from_secs(config.interval_secs);
         }
         if self.config.eraser_modifier != config.eraser_modifier && self.temporary_eraser {
-            if let Some((id, _, _)) = self.active { self.set_eraser_held(id, false, now); }
+            if let Some((id, _, _)) = self.active {
+                self.set_eraser_held(id, false, now);
+            }
         }
         self.config = config;
     }
@@ -114,7 +123,9 @@ impl Scheduler {
                     if let Some((id, _, _)) = self.active {
                         if down && !self.eraser.held {
                             self.temporary_eraser = self.set_eraser_held(id, true, now);
-                            if self.temporary_eraser { crate::eraser_input::temporary_key(key); }
+                            if self.temporary_eraser {
+                                crate::eraser_input::temporary_key(key);
+                            }
                         } else if !down && self.temporary_eraser {
                             self.set_eraser_held(id, false, now);
                         }
@@ -158,8 +169,13 @@ impl Scheduler {
         self.eraser.enabled =
             self.config.eraser_enabled && self.config.reminder_mode == ReminderMode::Fog;
         self.generation += 1;
+        self.notifications
+            .retain(|message| *message != "即将开始休息提示");
         self.active = Some((self.generation, now, self.config.reminder_mode));
         crate::eraser_input::active_round(Some(self.generation));
+        if self.config.fog_notifications && self.config.reminder_mode == ReminderMode::Fog {
+            self.notifications.push("即将开始休息提示");
+        }
         self.next_due = now + Duration::from_secs(self.config.interval_secs);
         self.generation
     }
@@ -175,6 +191,13 @@ impl Scheduler {
                     SOFT_DURATION
                 }
         }) {
+            if self.config.fog_notifications
+                && self
+                    .active
+                    .is_some_and(|(_, _, mode)| mode == ReminderMode::Fog)
+            {
+                self.notifications.push("雾已散去");
+            }
             self.reset_eraser();
             self.active = None;
             self.generation += 1;
@@ -248,6 +271,8 @@ impl Scheduler {
         if self.active.map(|(id, _, _)| id) != Some(round_id) {
             return false;
         }
+        self.notifications
+            .retain(|message| *message != "即将开始休息提示");
         self.reset_eraser();
         self.active = None;
         self.generation += 1;
@@ -270,12 +295,22 @@ impl Scheduler {
     /// Click count comes from the OS/webview; remember the docked first click even
     /// though the first click already picked up the shared eraser.
     pub fn holder_click(&mut self, round_id: u64, double: bool, now: Instant) -> bool {
-        if self.active.map(|a| a.0) != Some(round_id) { return false; }
-        if double && self.eraser.enabled && (!self.eraser.held || self.holder_pickup.is_some_and(|at| now.saturating_duration_since(at) <= Duration::from_secs(2))) {
+        if self.active.map(|a| a.0) != Some(round_id) {
+            return false;
+        }
+        if double
+            && self.eraser.enabled
+            && (!self.eraser.held
+                || self
+                    .holder_pickup
+                    .is_some_and(|at| now.saturating_duration_since(at) <= Duration::from_secs(2)))
+        {
             return self.finish(round_id, now);
         }
         let pickup = !self.eraser.held;
-        if !self.set_eraser_held(round_id, pickup, now) { return false; }
+        if !self.set_eraser_held(round_id, pickup, now) {
+            return false;
+        }
         self.holder_pickup = if pickup { Some(now) } else { None };
         true
     }
@@ -389,12 +424,30 @@ mod tests {
         let mut scheduler = Scheduler::new(config, now);
         let id = scheduler.preview(now);
         let fog = now + Duration::from_secs(3);
-        scheduler.system_event(SystemEvent::Modifier { key: 0x10, down: true }, fog);
+        scheduler.system_event(
+            SystemEvent::Modifier {
+                key: 0x10,
+                down: true,
+            },
+            fog,
+        );
         assert!(!scheduler.snapshot(fog).eraser.held);
-        scheduler.system_event(SystemEvent::Modifier { key: 0x12, down: true }, fog);
+        scheduler.system_event(
+            SystemEvent::Modifier {
+                key: 0x12,
+                down: true,
+            },
+            fog,
+        );
         assert!(scheduler.snapshot(fog).eraser.held);
         scheduler.eraser_input(id, 1, 5.0, 10.0, fog);
-        scheduler.system_event(SystemEvent::Modifier { key: 0x12, down: false }, fog);
+        scheduler.system_event(
+            SystemEvent::Modifier {
+                key: 0x12,
+                down: false,
+            },
+            fog,
+        );
         assert!(!scheduler.snapshot(fog).eraser.held);
         assert_eq!(scheduler.snapshot(fog).eraser.strokes.len(), 1);
         scheduler.eraser_input(id, 0, 100.0, 100.0, fog);
@@ -425,26 +478,73 @@ mod tests {
     }
 
     #[test]
+    fn fog_submits_once_at_prelude_and_after_natural_fade() {
+        let now = Instant::now();
+        let mut config = DaemonConfig::default();
+        config.reminder_mode = ReminderMode::Fog;
+        let mut scheduler = Scheduler::new(config, now);
+        scheduler.preview(now);
+        assert_eq!(scheduler.take_notifications(), vec!["即将开始休息提示"]);
+        assert!(scheduler.take_notifications().is_empty());
+        scheduler.tick(now + Duration::from_secs(22));
+        assert!(scheduler.take_notifications().is_empty());
+        scheduler.tick(now + Duration::from_secs(23));
+        assert_eq!(scheduler.take_notifications(), vec!["雾已散去"]);
+        scheduler.tick(now + Duration::from_secs(24));
+        assert!(scheduler.take_notifications().is_empty());
+    }
+
+    #[test]
+    fn notifications_can_be_disabled_without_stopping_visuals() {
+        let now = Instant::now();
+        let mut config = DaemonConfig::default();
+        config.reminder_mode = ReminderMode::Fog;
+        config.fog_notifications = false;
+        let mut scheduler = Scheduler::new(config, now);
+        scheduler.preview(now);
+        assert_eq!(scheduler.snapshot(now).phase, Phase::Warning);
+        assert!(scheduler.take_notifications().is_empty());
+        scheduler.tick(now + Duration::from_secs(23));
+        assert_eq!(scheduler.snapshot(now).phase, Phase::Monitoring);
+        assert!(scheduler.take_notifications().is_empty());
+    }
+
+    #[test]
+    fn interrupted_round_cancels_unsubmitted_prelude() {
+        let now = Instant::now();
+        let mut config = DaemonConfig::default();
+        config.reminder_mode = ReminderMode::Fog;
+        let mut scheduler = Scheduler::new(config, now);
+        let id = scheduler.preview(now);
+        scheduler.finish(id, now);
+        assert!(scheduler.take_notifications().is_empty());
+    }
+
+    #[test]
     fn every_round_exit_discards_held_eraser_and_rejects_queued_strokes() {
         for exit in 0..5 {
-            let now=Instant::now();
-            let mut config=DaemonConfig::default();
-            config.reminder_mode=ReminderMode::Fog;
-            config.eraser_enabled=true;
-            let mut scheduler=Scheduler::new(config,now);
-            let id=scheduler.preview(now);
-            let fog=now+Duration::from_secs(4);
-            assert!(!scheduler.set_eraser_held(id,true,now));
-            assert!(scheduler.set_eraser_held(id,true,fog));
-            scheduler.eraser_input(id,1,20.0,30.0,fog);
+            let now = Instant::now();
+            let mut config = DaemonConfig::default();
+            config.reminder_mode = ReminderMode::Fog;
+            config.eraser_enabled = true;
+            let mut scheduler = Scheduler::new(config, now);
+            let id = scheduler.preview(now);
+            let fog = now + Duration::from_secs(4);
+            assert!(!scheduler.set_eraser_held(id, true, now));
+            assert!(scheduler.set_eraser_held(id, true, fog));
+            scheduler.eraser_input(id, 1, 20.0, 30.0, fog);
             match exit {
-                0 => { scheduler.finish(id,fog); },
-                1 => { scheduler.tick(now+Duration::from_secs(23)); },
-                2 => scheduler.pause(60,fog),
-                3 => scheduler.system_event(SystemEvent::Locked(true),fog),
-                _ => scheduler.system_event(SystemEvent::Silenced(true),fog),
+                0 => {
+                    scheduler.finish(id, fog);
+                }
+                1 => {
+                    scheduler.tick(now + Duration::from_secs(23));
+                }
+                2 => scheduler.pause(60, fog),
+                3 => scheduler.system_event(SystemEvent::Locked(true), fog),
+                _ => scheduler.system_event(SystemEvent::Silenced(true), fog),
             }
-            scheduler.eraser_input(id,0,40.0,50.0,fog);
+            scheduler.eraser_input(id, 0, 40.0, 50.0, fog);
             assert!(!scheduler.snapshot(fog).eraser.held);
             assert!(scheduler.snapshot(fog).eraser.strokes.is_empty());
         }
@@ -527,6 +627,34 @@ mod tests {
         assert!(!scheduler.preview_if_current(generation, now));
         assert!(!scheduler.finish(id, now));
         assert_eq!(scheduler.tick(now + Duration::from_secs(3)), None);
+    }
+
+    #[test]
+    fn soft_and_interrupted_fog_do_not_submit_natural_end() {
+        let now = Instant::now();
+        let mut soft = Scheduler::new(DaemonConfig::default(), now);
+        soft.preview(now);
+        soft.tick(now + Duration::from_secs(3));
+        assert!(soft.take_notifications().is_empty());
+        for interrupt in 0..5 {
+            let mut config = DaemonConfig::default();
+            config.reminder_mode = ReminderMode::Fog;
+            let mut scheduler = Scheduler::new(config, now);
+            let id = scheduler.preview(now);
+            assert_eq!(scheduler.take_notifications(), vec!["即将开始休息提示"]);
+            match interrupt {
+                0 => {
+                    scheduler.finish(id, now);
+                }
+                1 => scheduler.system_event(SystemEvent::Locked(true), now),
+                2 => scheduler.system_event(SystemEvent::Sleeping(true), now),
+                3 => scheduler.system_event(SystemEvent::Silenced(true), now),
+                _ => scheduler.pause(60, now),
+            }
+            scheduler.tick(now + Duration::from_secs(23));
+            assert!(scheduler.take_notifications().is_empty());
+            assert_eq!(scheduler.snapshot(now).round_id, None);
+        }
     }
 
     #[test]

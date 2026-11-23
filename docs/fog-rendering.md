@@ -80,8 +80,9 @@ settings default to off and round-trip with config.
 Automated coverage exercises scheduler radius/marks/deadline, modifier return,
 docked double-click exit and stale actions, configuration defaults/migration, and
 native callback filtering (original desktop drag, holder exemption, wheel ownership,
-and matched release after ending mid-drag). The singleton native callback test must
-run separately: `cargo test native_events --lib -- --ignored --test-threads=1`.
+and matched release after ending mid-drag). The singleton native callback tests (including macOS optional, edge-triggered,
+round-scoped keyboard exit) must
+run separately: `cargo test native_ --lib -- --ignored --test-threads=1`.
 Compilation and callback tests do not prove OS delivery: packaged macOS and Windows
 acceptance must still verify Accessibility denial/regrant, both left/right modifier
 keys, wheel/trackpad behavior over underlying scrollable apps, keyboard close,

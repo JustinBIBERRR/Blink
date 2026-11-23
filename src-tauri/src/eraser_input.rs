@@ -14,18 +14,28 @@ static CONTROLS: std::sync::Mutex<Vec<[f64; 4]>> = std::sync::Mutex::new(Vec::ne
 pub fn controls(bounds: Vec<[f64; 4]>) {
     *CONTROLS.lock().unwrap() = bounds;
 }
-pub fn active_round(round: Option<u64>) { ACTIVE.store(round.unwrap_or(0), Ordering::SeqCst); }
-pub fn current_round() -> u64 { ACTIVE.load(Ordering::SeqCst) }
-pub fn temporary_key(key: u32) { TEMP_KEY.store(key as u64, Ordering::SeqCst); }
+pub fn active_round(round: Option<u64>) {
+    ACTIVE.store(round.unwrap_or(0), Ordering::SeqCst);
+}
+pub fn current_round() -> u64 {
+    ACTIVE.load(Ordering::SeqCst)
+}
+pub fn temporary_key(key: u32) {
+    TEMP_KEY.store(key as u64, Ordering::SeqCst);
+}
 #[no_mangle]
 pub extern "C" fn blink_modifier_event(key: u32, down: bool) {
-    if !down && TEMP_KEY.load(Ordering::SeqCst) == key as u64 { capture(None); }
+    if !down && TEMP_KEY.load(Ordering::SeqCst) == key as u64 {
+        capture(None);
+    }
     if let Some(tx) = EVENTS.get() {
         let _ = tx.send((current_round(), if down { 5 } else { 6 }, key as f64, 0.0));
     }
 }
 #[no_mangle]
-pub extern "C" fn blink_pointer_initial(down: bool) { DOWN.store(down, Ordering::SeqCst); }
+pub extern "C" fn blink_pointer_initial(down: bool) {
+    DOWN.store(down, Ordering::SeqCst);
+}
 pub fn capture(round: Option<u64>) {
     ROUND.store(round.unwrap_or(0), Ordering::SeqCst);
 }
@@ -71,7 +81,13 @@ pub fn install(shared: crate::daemon::SharedState) {
             let mut scheduler = shared.lock().unwrap();
             if kind == 5 || kind == 6 {
                 if scheduler.snapshot(now).round_id == Some(round) {
-                    scheduler.system_event(crate::scheduler::SystemEvent::Modifier { key: x as u32, down: kind == 5 }, now);
+                    scheduler.system_event(
+                        crate::scheduler::SystemEvent::Modifier {
+                            key: x as u32,
+                            down: kind == 5,
+                        },
+                        now,
+                    );
                 }
             } else {
                 scheduler.eraser_input(round, kind, x, y, now);
@@ -116,7 +132,15 @@ mod windows_hook {
                 _ => None,
             };
             if let Some(kind) = kind {
-                if blink_pointer_event(kind, if kind == 4 { ((event.mouseData >> 16) as i16) as f64 / 120.0 } else { event.pt.x as f64 }, event.pt.y as f64) {
+                if blink_pointer_event(
+                    kind,
+                    if kind == 4 {
+                        ((event.mouseData >> 16) as i16) as f64 / 120.0
+                    } else {
+                        event.pt.x as f64
+                    },
+                    event.pt.y as f64,
+                ) {
                     return LRESULT(1);
                 }
             }
@@ -127,7 +151,11 @@ mod windows_hook {
         *READY.get_or_init(|| {
             let (tx, rx) = mpsc::channel();
             std::thread::spawn(move || unsafe {
-                blink_pointer_initial((windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState(1) as u16 & 0x8000) != 0);
+                blink_pointer_initial(
+                    (windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState(1) as u16
+                        & 0x8000)
+                        != 0,
+                );
                 let hook = SetWindowsHookExW(WH_MOUSE_LL, Some(hook), None, 0);
                 let _ = tx.send(hook.is_ok());
                 if let Ok(handle) = hook {
