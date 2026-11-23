@@ -16,6 +16,7 @@ pub async fn run(
             let mut scheduler = shared.lock().unwrap();
             scheduler.is_silenced = crate::silence::SilenceChecker::new().is_silenced();
             let now = std::time::Instant::now();
+            scheduler.refresh_pause(crate::pause_store::wall_now(), now);
             if let Some(idle) = crate::input_idle::duration() {
                 scheduler.idle_for(idle, now);
             }
