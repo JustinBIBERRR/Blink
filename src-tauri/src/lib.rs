@@ -1,9 +1,10 @@
-mod capture;
 mod commands;
 mod config_store;
 mod daemon;
 mod db;
 mod hotkey;
+mod presentation;
+mod scheduler;
 mod silence;
 mod startup;
 mod state;
@@ -12,9 +13,9 @@ mod tray;
 use commands::{AppConfig, AppDb, AppSharedState};
 use daemon::SharedState;
 use db::Db;
-use state::{DaemonConfig, DaemonState, Phase};
+use scheduler::Scheduler;
 use std::sync::{Arc, Mutex};
-use tauri::{Emitter, Listener, Manager};
+use tauri::Listener;
 
 pub fn run() {
     // Default to info-level logging unless overridden via RUST_LOG.
@@ -50,16 +51,19 @@ pub fn run() {
     }
 
     let shared_config = Arc::new(Mutex::new(config));
-    let shared_state: SharedState = Arc::new(Mutex::new(DaemonState::new(
+    let shared_state: SharedState = Arc::new(Mutex::new(Scheduler::new(
         shared_config.lock().unwrap().clone(),
+        std::time::Instant::now(),
     )));
 
-    let db_clone = db.clone();
+    let db_for_daemon = db.clone();
+    let db_for_hotkey = db.clone();
     let state_clone = shared_state.clone();
     let cfg_for_hotkey = shared_config.clone();
 
     tauri::Builder::default()
         .plugin(tauri_plugin_notification::init())
+        .manage(presentation::ReadyWindows::default())
         .manage(AppDb(db.clone()))
         .manage(AppConfig(shared_config.clone()))
         .manage(AppSharedState(shared_state.clone()))
@@ -67,137 +71,46 @@ pub fn run() {
             // System tray
             tray::setup_tray(&app.handle())?;
 
-            // First-run Toast: no sessions ever recorded
-            {
-                let db_guard = db_clone.lock().unwrap();
-                let is_first_run: bool = db_guard
-                    .conn
-                    .query_row("SELECT COUNT(*) FROM sessions", [], |r| r.get::<_, i64>(0))
-                    .unwrap_or(1)
-                    == 0;
-                drop(db_guard);
-                if is_first_run {
-                    use tauri_plugin_notification::NotificationExt;
-                    let _ = app
-                        .handle()
-                        .notification()
-                        .builder()
-                        .title("👁 Blink is running")
-                        .body("First eye break in 20 minutes. Right-click tray icon to configure.")
-                        .show();
-                }
-            }
-
-            // Daemon loop
+            presentation::ensure_windows(app.handle())?;
             let app_handle = app.handle().clone();
-            let db_for_daemon = db_clone.clone();
-            tauri::async_runtime::spawn(daemon::run(
-                state_clone.clone(),
-                || silence::SilenceChecker::new().is_silenced(),
-                move |phase, outcome| {
-                    // Record completed sessions
-                    if let Some(outcome) = outcome {
-                        if let Ok(db) = db_for_daemon.lock() {
-                            db.record_session(&outcome).ok();
-                        }
-                    }
-                    // Emit phase change to all windows
-                    log::info!("phase -> {phase:?}");
-                    let _ = app_handle.emit("blink://phase", &phase);
-                    // Show/hide overlay window
-                    if let Some(overlay) = app_handle.get_webview_window("overlay") {
-                        match phase {
-                            Phase::Monitoring => {
-                                let _ = overlay.hide();
-                            }
-                            Phase::Warning => {
-                                // Capture the clean desktop BEFORE showing the overlay, so the
-                                // frozen snapshot doesn't include our own window. The overlay
-                                // blurs these pixels behind the radial mask during spreading.
-                                match capture::capture_primary_screen_data_url(2) {
-                                    Ok(data_url) => {
-                                        let _ = app_handle.emit("blink://capture", data_url);
-                                    }
-                                    Err(e) => {
-                                        log::warn!("screen capture failed: {e}");
-                                        let _ = app_handle.emit("blink://capture", String::new());
-                                    }
-                                }
-                                // Resize to primary monitor physical resolution before showing
-                                if let Ok(Some(monitor)) = overlay.primary_monitor() {
-                                    let sz = monitor.size();
-                                    let pos = monitor.position();
-                                    let _ = overlay.set_size(tauri::Size::Physical(
-                                        tauri::PhysicalSize { width: sz.width, height: sz.height },
-                                    ));
-                                    let _ = overlay.set_position(tauri::Position::Physical(
-                                        tauri::PhysicalPosition { x: pos.x, y: pos.y },
-                                    ));
-                                }
-                                // SPIKE 2: whole-window click-through. Verify transparency
-                                // stays intact now that the body is transparent (Task 1).
-                                let _ = overlay.set_ignore_cursor_events(true);
-                                let _ = overlay.show();
-                            }
-                            // Spreading / Holding / Dissolving: just keep it shown.
-                            _ => {
-                                let _ = overlay.show();
-                            }
-                        }
-                    }
-                },
-            ));
+            let previous = Arc::new(Mutex::new(None));
+            tauri::async_runtime::spawn(daemon::run(state_clone.clone(), move |outcome| {
+                if let Some(outcome) = outcome {
+                    let _ = db_for_daemon.lock().unwrap().record_session(&outcome);
+                }
+                let handle = app_handle.clone();
+                let previous = previous.clone();
+                let _ = app_handle.run_on_main_thread(move || {
+                    presentation::reconcile(&handle, &mut previous.lock().unwrap());
+                });
+            }));
 
-            // No window region: the clear center is produced by the CSS gradient
-            // mask over a transparent window. Interaction is whole-window
-            // click-through (set_ignore_cursor_events on show). The blurred
-            // background is a SINGLE frozen frame captured at the Warning
-            // transition (above) — smooth and appropriate for a rest moment.
-
-            // Global escape combo via low-level keyboard hook (hotkey.rs).
             let (esc_tx, esc_rx) = std::sync::mpsc::channel::<()>();
             hotkey::install(esc_tx);
-            hotkey::set_combo(hotkey::parse_combo(
-                &cfg_for_hotkey.lock().unwrap().hotkey,
-            ));
-
-            let app_handle2 = app.handle().clone();
+            hotkey::set_combo(hotkey::parse_combo(&cfg_for_hotkey.lock().unwrap().hotkey));
             let state_for_hotkey = state_clone.clone();
-            let db_for_hotkey = db_clone.clone();
             std::thread::spawn(move || {
                 while esc_rx.recv().is_ok() {
-                    let outcome = {
-                        let mut s = state_for_hotkey.lock().unwrap();
-                        if matches!(s.phase, Phase::Monitoring | Phase::Dissolving) {
-                            continue; // nothing to escape in these phases
+                    let now = std::time::Instant::now();
+                    let mut state = state_for_hotkey.lock().unwrap();
+                    if let Some(id) = state.snapshot(now).round_id {
+                        if state.finish(id, now) {
+                            let _ = db_for_hotkey
+                                .lock()
+                                .unwrap()
+                                .record_session(&state::SessionOutcome::WarnSkipped);
                         }
-                        let outcome = daemon::escape_outcome(&s.phase);
-                        s.transition_to(Phase::Monitoring);
-                        outcome
-                    };
-                    if let Ok(db) = db_for_hotkey.lock() {
-                        db.record_session(&outcome).ok();
-                    }
-                    let _ = app_handle2.emit("blink://phase", Phase::Monitoring);
-                    if let Some(overlay) = app_handle2.get_webview_window("overlay") {
-                        let _ = overlay.hide();
                     }
                 }
             });
 
-            // Pause event listener (emitted by tray.rs as "blink://pause")
             let state_for_pause = state_clone.clone();
             app.listen("blink://pause", move |event: tauri::Event| {
                 if let Ok(secs) = serde_json::from_str::<u64>(event.payload()) {
-                    let mut s = state_for_pause.lock().unwrap();
-                    if secs == 0 {
-                        s.paused_until = None;
-                    } else {
-                        s.paused_until = Some(
-                            std::time::Instant::now() + std::time::Duration::from_secs(secs),
-                        );
-                        s.transition_to(Phase::Monitoring);
-                    }
+                    state_for_pause
+                        .lock()
+                        .unwrap()
+                        .pause(secs, std::time::Instant::now());
                 }
             });
 
@@ -210,6 +123,9 @@ pub fn run() {
             commands::get_config,
             commands::save_config,
             commands::close_panel,
+            commands::preview_reminder,
+            commands::get_reminder,
+            commands::overlay_ready,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
