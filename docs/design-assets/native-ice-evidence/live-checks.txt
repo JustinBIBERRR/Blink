@@ -1,0 +1,18 @@
+PASS telemetry exists
+PASS run includes baseline, render, dissolve and stop
+PASS no reported capture or GPU errors
+PASS at least five active sampling intervals
+PASS source is labelled consistently
+PASS live capture delivers frames during rendering
+PASS GPU execution actually measured
+PASS contact reaches renderer submission
+PASS at least 100 render submissions
+PASS all submitted GPU frames complete
+PASS at least three post-stop idle samples
+PASS stopped samples have no session textures, capture, render timer or GPU work
+PASS frame counters stop advancing after stop
+PASS process measurements available
+{"phase": "baseline", "samples": 14, "cpuPercent": {"median": 0.351, "min": 0.034, "max": 5.884}, "residentMB": {"median": 86.844, "min": 82.078, "max": 86.875}}
+{"phase": "live active", "samples": 69, "cpuPercent": {"median": 3.33, "min": 2.974, "max": 7.14}, "residentMB": {"median": 105.016, "min": 101.438, "max": 105.312}, "frameP95Ms": {"median": 33.951, "min": 33.443, "max": 52.708}, "gpuP50Ms": {"median": 1.866, "min": 1.254, "max": 2.69}}
+{"phase": "post-stop idle", "samples": 28, "cpuPercent": {"median": 0.316, "min": 0.034, "max": 6.197}, "residentMB": {"median": 99.141, "min": 99.094, "max": 99.188}}
+Live lifecycle verification only. Visual quality, display latency and multi-display performance need separate validation.
