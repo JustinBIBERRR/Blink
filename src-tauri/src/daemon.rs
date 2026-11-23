@@ -21,6 +21,7 @@ pub async fn run(
                 ),
                 now,
             );
+            scheduler.refresh_pause(crate::pause_store::wall_now(), now);
             if let Some(idle) = crate::input_idle::duration() {
                 scheduler.idle_for(idle, now);
             }
