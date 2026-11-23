@@ -42,6 +42,7 @@ watch(() => props.snapshot.round_id, async id => {
   desktop.src = ''; capturedRound = null;
   if (id === null || props.snapshot.mode !== 'fog') return;
   try {
+    geometry = await invoke<number[]>('overlay_geometry');
     const url = await invoke<string | null>('fog_capture');
     if (props.snapshot.round_id === id && url) { desktop.src = url; capturedRound = id; }
   } catch (error) { console.error('Desktop blur capture failed', error); }

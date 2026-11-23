@@ -9,11 +9,12 @@
 import { useReminder } from '../../composables/useReminder';
 import FogLayer from './FogLayer.vue';
 import EraserArt from './EraserArt.vue';
-import { ref, onMounted } from 'vue';
+import { ref, onMounted, watch } from 'vue';
 import { invoke } from '@tauri-apps/api/core';
 const geometry=ref([0,0,1]);
 onMounted(async()=>{geometry.value=await invoke<number[]>('overlay_geometry');});
 const { snapshot, receivedAt } = useReminder();
+watch(()=>snapshot.value.round_id, async id=>{if(id!==null) geometry.value=await invoke<number[]>('overlay_geometry');});
 </script>
 
 <style>
