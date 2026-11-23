@@ -316,6 +316,32 @@ mod tests {
     use std::time::{Duration, Instant};
 
     #[test]
+    fn every_round_exit_discards_held_eraser_and_rejects_queued_strokes() {
+        for exit in 0..5 {
+            let now=Instant::now();
+            let mut config=DaemonConfig::default();
+            config.reminder_mode=ReminderMode::Fog;
+            config.eraser_enabled=true;
+            let mut scheduler=Scheduler::new(config,now);
+            let id=scheduler.preview(now);
+            let fog=now+Duration::from_secs(4);
+            assert!(!scheduler.set_eraser_held(id,true,now));
+            assert!(scheduler.set_eraser_held(id,true,fog));
+            scheduler.eraser_input(id,1,20.0,30.0,fog);
+            match exit {
+                0 => { scheduler.finish(id,fog); },
+                1 => { scheduler.tick(now+Duration::from_secs(23)); },
+                2 => scheduler.pause(60,fog),
+                3 => scheduler.system_event(SystemEvent::Locked(true),fog),
+                _ => scheduler.system_event(SystemEvent::Silenced(true),fog),
+            }
+            scheduler.eraser_input(id,0,40.0,50.0,fog);
+            assert!(!scheduler.snapshot(fog).eraser.held);
+            assert!(scheduler.snapshot(fog).eraser.strokes.is_empty());
+        }
+    }
+
+    #[test]
     fn eraser_is_shared_retains_multiple_strokes_and_releases_on_interrupt() {
         let now = Instant::now();
         let mut config = DaemonConfig::default();

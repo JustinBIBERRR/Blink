@@ -19,8 +19,8 @@ pub fn is_auto_start_enabled() -> bool {
 
 #[cfg(target_os = "windows")]
 fn set_auto_start_windows(enabled: bool) -> Result<(), Box<dyn std::error::Error>> {
-    use windows::core::PCWSTR;
     use windows::Win32::System::Registry::*;
+    use windows::core::PCWSTR;
 
     let key_path = encode_wide("Software\\Microsoft\\Windows\\CurrentVersion\\Run");
     let name = encode_wide("Blink");
@@ -61,8 +61,8 @@ fn set_auto_start_windows(enabled: bool) -> Result<(), Box<dyn std::error::Error
 
 #[cfg(target_os = "windows")]
 fn is_auto_start_enabled_windows() -> bool {
-    use windows::core::PCWSTR;
     use windows::Win32::System::Registry::*;
+    use windows::core::PCWSTR;
 
     let key_path = encode_wide("Software\\Microsoft\\Windows\\CurrentVersion\\Run");
     let name = encode_wide("Blink");
@@ -100,10 +100,7 @@ fn is_auto_start_enabled_windows() -> bool {
 fn encode_wide(s: &str) -> Vec<u16> {
     use std::ffi::OsStr;
     use std::os::windows::ffi::OsStrExt;
-    OsStr::new(s)
-        .encode_wide()
-        .chain(std::iter::once(0))
-        .collect()
+    OsStr::new(s).encode_wide().chain(std::iter::once(0)).collect()
 }
 
 #[cfg(test)]
