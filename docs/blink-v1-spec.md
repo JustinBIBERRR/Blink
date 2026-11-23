@@ -72,3 +72,4 @@ Blink 默认在所有参与桌面显示的屏幕上同步播放约 3 秒的柔�
 
 - 柔和边缘与冷凝扩张以已确认的可播放动效稿为视觉依据。布局和黑板擦造型以[第一版写实斜视角概念稿（下半部分）](design-assets/eraser-original-oblique.png)及[最终四屏评审稿](design-assets/blink-final-four-panel-review.png)为依据。
 - 冷凝动效已在本地播放稿中检查过，擦痕来自静态评审稿。现有桌面捕获实现仍是 Windows 专用。原生多屏渲染、输入恢复与两端安装包需要实际验收。
+- [冷凝过程分镜](design-assets/blink-condensation-storyboard.png)提供起雾各阶段的静态参考，动效节奏以已确认的播放稿为准。
