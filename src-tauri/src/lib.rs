@@ -113,15 +113,21 @@ pub fn run() {
                 });
             }));
 
-            let (esc_tx, esc_rx) = std::sync::mpsc::channel::<()>();
+            let (esc_tx, esc_rx) = std::sync::mpsc::channel::<u64>();
             hotkey::install(esc_tx);
             hotkey::set_combo(hotkey::parse_combo(&cfg_for_hotkey.lock().unwrap().hotkey));
+            {
+                let cfg = cfg_for_hotkey.lock().unwrap();
+                if !cfg.hotkey.is_empty() || (cfg.eraser_enabled && cfg.eraser_modifier.is_some()) {
+                    eraser_input::available();
+                }
+            }
             let state_for_hotkey = state_clone.clone();
             std::thread::spawn(move || {
-                while esc_rx.recv().is_ok() {
+                while let Ok(id) = esc_rx.recv() {
                     let now = std::time::Instant::now();
                     let mut state = state_for_hotkey.lock().unwrap();
-                    if let Some(id) = state.snapshot(now).round_id {
+                    if state.snapshot(now).round_id == Some(id) {
                         if state.finish(id, now) {
                             let _ = db_for_hotkey
                                 .lock()
@@ -150,6 +156,7 @@ pub fn run() {
             commands::fog_mask,
             commands::fog_capture,
             commands::set_eraser_held,
+            commands::holder_click,
             commands::overlay_geometry,
         ])
         .run(tauri::generate_context!())

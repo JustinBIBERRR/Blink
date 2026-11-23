@@ -55,3 +55,35 @@ release acceptance still requires both platforms with mixed-DPI monitors, origin
 application drags, right/middle clicks, ending mid-drag, denied Accessibility, and
 moving desktop content visible through erased frost/droplets. SVG felt/holder art is
 an implementation of the approved oblique reference, pending visual acceptance.
+
+## Eraser shortcuts (#10)
+
+A held eraser consumes vertical and horizontal wheel events and changes the radius
+of future segments (12–160 desktop units, four units per wheel step). Existing
+marks keep their radius. Neither scrolling nor keyboard/holder actions changes the
+23-second round deadline. Configured Ctrl, Shift, Alt/Option or Windows/Command hold
+can temporarily pick up a docked eraser; releasing it returns it and stops capture.
+An already manually held eraser stays held when an unrelated modifier is released.
+Both platforms install actual native keyboard and mouse hooks. macOS requests
+Accessibility on explicit pickup or opting into a keyboard operation. With access
+denied, the visible close control remains independent; grant access and retry
+pickup or save the shortcut configuration to start the native hook.
+
+The holder remembers that a double click began docked, so its first-click pickup
+does not prevent whole-round exit. The frontend serializes the two commands around
+native permission checks. Close hotkeys are empty by default, and an empty setting
+never triggers. Existing persisted shortcuts are preserved, including the former
+prototype default: older files cannot distinguish an intentional choice from that
+default. Users can clear all shortcut boxes to disable it. New temporary-modifier
+settings default to off and round-trip with config.
+
+Automated coverage exercises scheduler radius/marks/deadline, modifier return,
+docked double-click exit and stale actions, configuration defaults/migration, and
+native callback filtering (original desktop drag, holder exemption, wheel ownership,
+and matched release after ending mid-drag). The singleton native callback tests (including macOS optional, edge-triggered,
+round-scoped keyboard exit) must
+run separately: `cargo test native_ --lib -- --ignored --test-threads=1`.
+Compilation and callback tests do not prove OS delivery: packaged macOS and Windows
+acceptance must still verify Accessibility denial/regrant, both left/right modifier
+keys, wheel/trackpad behavior over underlying scrollable apps, keyboard close,
+double-click timing, and interruption during a drag on mixed-DPI monitors.

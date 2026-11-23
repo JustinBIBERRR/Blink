@@ -44,6 +44,12 @@
             </select>
           </label>
           <label v-if="config.reminder_mode === 'fog'" class="field-label"><input type="checkbox" v-model="config.eraser_enabled" /> 启用黑板擦，局部擦开雾气</label>
+          <label v-if="config.reminder_mode === 'fog' && config.eraser_enabled" class="field-label">按住临时拾取
+            <select v-model="config.eraser_modifier" aria-label="临时拾取修饰键">
+              <option :value="null">关闭</option><option value="ctrl">Ctrl</option><option value="shift">Shift</option><option value="alt">Alt / Option</option><option value="meta">Windows / Command</option>
+            </select>
+          </label>
+          <p v-if="config.reminder_mode === 'fog' && config.eraser_enabled" class="field-label">持擦时滚轮调节尺寸；松开临时拾取键归位。双击归位的黑板擦结束本轮。</p>
           <p class="field-label">{{ config.reminder_mode === 'soft' ? '外缘冷光轻亮约 3 秒，正文保持清晰。' : '3 秒边缘预告后，雾气凝结并在 20 秒内散去。' }}</p>
           <label v-if="config.reminder_mode === 'fog'" class="field-label">
             <input type="checkbox" v-model="config.fog_notifications" /> 无声系统通知
@@ -58,7 +64,7 @@
         <div class="label-caps">ESCAPE HOTKEY</div>
         <div class="card">
           <p class="field-label" style="margin-bottom:8px">
-            Skip intervention · double-click a box to edit, leave empty to remove
+            可选关闭快捷键 · 默认关闭，双击方框设置，清空所有方框可关闭
           </p>
           <div class="keys-row">
             <template v-for="(slot, i) in slots" :key="i">
@@ -134,12 +140,13 @@ const config = reactive<DaemonConfig>({
   reminder_mode: 'soft',
   fog_notifications: true,
   eraser_enabled: false,
+  eraser_modifier: null,
   interval_secs: 1200,
   warning_secs: 5,
   spreading_secs: 20,
   holding_secs: 20,
   dissolving_secs: 10,
-  hotkey: 'ctrl+shift+space',
+  hotkey: '',
   auto_start: true,
 });
 

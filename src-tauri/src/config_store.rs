@@ -45,6 +45,24 @@ mod tests {
     use super::*;
 
     #[test]
+    fn shortcuts_are_opt_in_and_existing_custom_shortcut_survives() {
+        assert!(DaemonConfig::default().hotkey.is_empty());
+        assert!(DaemonConfig::default().eraser_modifier.is_none());
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        std::fs::write(&path, r#"{"interval_secs":1200,"warning_secs":5,"spreading_secs":20,"holding_secs":20,"dissolving_secs":10,"hotkey":"ctrl+shift+space","auto_start":false}"#).unwrap();
+        let mut config = load_from(&path).unwrap();
+        assert_eq!(config.hotkey, "ctrl+shift+space");
+        assert!(config.eraser_modifier.is_none());
+        config.eraser_modifier = Some(crate::state::EraserModifier::Alt);
+        save_to(&path, &config).unwrap();
+        assert_eq!(
+            load_from(&path).unwrap().eraser_modifier,
+            Some(crate::state::EraserModifier::Alt)
+        );
+    }
+
+    #[test]
     fn existing_config_without_mode_uses_soft_reminder() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("config.json");
