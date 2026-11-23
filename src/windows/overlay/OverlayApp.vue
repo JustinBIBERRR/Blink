@@ -1,31 +1,13 @@
 <template>
+  <FogLayer :snapshot="snapshot" :received-at="receivedAt" />
   <div v-if="snapshot.round_id !== null" :key="snapshot.round_id" class="soft-reminder"
     :style="{ animationDelay: `-${snapshot.elapsed_ms}ms` }" aria-hidden="true" />
 </template>
 
 <script setup lang="ts">
-import { onMounted, onUnmounted, ref } from 'vue';
-import { listen } from '@tauri-apps/api/event';
-import { invoke } from '@tauri-apps/api/core';
-
-type Snapshot = { generation: number; round_id: number | null; elapsed_ms: number; phase: string };
-const snapshot = ref<Snapshot>({ generation: 0, round_id: null, elapsed_ms: 0, phase: 'monitoring' });
-let unlisten: (() => void) | undefined;
-let disposed = false;
-function accept(next: Snapshot) {
-  // A late initial query or event cannot bring back an older round.
-  if (next.generation < snapshot.value.generation) return;
-  snapshot.value = next;
-}
-onMounted(async () => {
-  const stop = await listen<Snapshot>('blink://reminder', event => accept(event.payload));
-  if (disposed) { stop(); return; }
-  unlisten = stop;
-  await invoke('overlay_ready');
-  const current = await invoke<Snapshot>('get_reminder');
-  if (!disposed) accept(current);
-});
-onUnmounted(() => { disposed = true; unlisten?.(); });
+import { useReminder } from '../../composables/useReminder';
+import FogLayer from './FogLayer.vue';
+const { snapshot, receivedAt } = useReminder();
 </script>
 
 <style>

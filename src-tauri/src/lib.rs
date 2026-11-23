@@ -1,3 +1,4 @@
+mod capture;
 mod commands;
 mod config_store;
 mod daemon;
@@ -141,6 +142,9 @@ pub fn run() {
             commands::get_pause,
             commands::set_pause,
             commands::overlay_ready,
+            commands::finish_reminder,
+            commands::fog_mask,
+            commands::fog_capture,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
