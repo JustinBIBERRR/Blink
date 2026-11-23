@@ -93,7 +93,7 @@ pub async fn preview_reminder(
             let ready = ready.0.lock().unwrap();
             app.webview_windows()
                 .keys()
-                .filter(|label| label.starts_with("overlay-"))
+                .filter(|label| label.starts_with("overlay-") || label.starts_with("controls-"))
                 .all(|label| ready.contains(label))
         };
         if all_ready {
@@ -118,4 +118,102 @@ pub fn overlay_ready(
     ready: State<crate::presentation::ReadyWindows>,
 ) {
     ready.0.lock().unwrap().insert(window.label().to_string());
+}
+
+#[tauri::command]
+pub fn finish_reminder(round_id: u64, shared: State<AppSharedState>) {
+    shared
+        .0
+        .lock()
+        .unwrap()
+        .finish(round_id, std::time::Instant::now());
+}
+
+#[tauri::command]
+pub fn fog_capture(window: tauri::WebviewWindow) -> Result<Option<String>, String> {
+    #[cfg(target_os = "windows")]
+    {
+        let monitor = window
+            .current_monitor()
+            .map_err(|e| e.to_string())?
+            .ok_or("monitor unavailable")?;
+        let position = monitor.position();
+        let size = monitor.size();
+        return crate::capture::capture_monitor_data_url(
+            position.x,
+            position.y,
+            size.width as i32,
+            size.height as i32,
+            2,
+        )
+        .map(Some);
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = window;
+        Ok(None)
+    }
+}
+
+#[tauri::command]
+pub fn fog_mask(
+    window: tauri::WebviewWindow,
+    round_id: u64,
+    alpha: Vec<u8>,
+    width: i32,
+    height: i32,
+    shared: State<AppSharedState>,
+) -> Result<(), String> {
+    if width < 1
+        || height < 1
+        || width > 320
+        || height > 180
+        || alpha.len() != (width * height) as usize
+    {
+        return Err("invalid mask".into());
+    }
+    if shared
+        .0
+        .lock()
+        .unwrap()
+        .snapshot(std::time::Instant::now())
+        .round_id
+        != Some(round_id)
+    {
+        return Ok(());
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let handle = window.clone();
+        window
+            .run_on_main_thread(move || {
+                // Recheck at execution time: delayed masks must never revive an old round.
+                let state = handle.state::<AppSharedState>();
+                if state
+                    .0
+                    .lock()
+                    .unwrap()
+                    .snapshot(std::time::Instant::now())
+                    .round_id
+                    != Some(round_id)
+                {
+                    return;
+                }
+                if let Ok(raw) = handle.ns_window() {
+                    unsafe {
+                        blink_fog_mask(raw, alpha.as_ptr(), width, height);
+                    }
+                }
+            })
+            .map_err(|e| e.to_string())?;
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = window;
+    }
+    Ok(())
+}
+#[cfg(target_os = "macos")]
+extern "C" {
+    pub fn blink_fog_mask(window: *mut std::ffi::c_void, alpha: *const u8, width: i32, height: i32);
 }

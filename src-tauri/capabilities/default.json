@@ -4,6 +4,7 @@
   "description": "Capability for blink-rs windows",
   "windows": [
     "overlay-*",
+    "controls-*",
     "stats",
     "settings"
   ],
