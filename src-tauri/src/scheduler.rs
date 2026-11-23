@@ -19,6 +19,7 @@ pub struct ReminderSnapshot {
 pub enum SystemEvent {
     Locked(bool),
     Sleeping(bool),
+    Silenced(bool),
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
@@ -33,6 +34,8 @@ pub struct EraserSnapshot {
 pub struct Scheduler {
     eraser: EraserSnapshot,
     eraser_last: Option<[f64; 2]>,
+    idle_deferred: bool,
+    return_grace_until: Option<Instant>,
     locked: bool,
     sleeping: bool,
     last_clock: Instant,
@@ -40,7 +43,8 @@ pub struct Scheduler {
     generation: u64,
     next_due: Instant,
     paused_until: Option<Instant>,
-    pub is_silenced: bool,
+    pause_deadline: Option<u64>,
+    is_silenced: bool,
     active: Option<(u64, Instant, ReminderMode)>,
 }
 
@@ -52,6 +56,8 @@ impl Scheduler {
                 ..Default::default()
             },
             eraser_last: None,
+            idle_deferred: false,
+            return_grace_until: None,
             locked: false,
             sleeping: false,
             last_clock: now,
@@ -60,7 +66,20 @@ impl Scheduler {
             generation: 0,
             active: None,
             paused_until: None,
+            pause_deadline: None,
             is_silenced: false,
+        }
+    }
+
+    /// Idle input controls display eligibility, never accumulated use time.
+    pub fn idle_for(&mut self, idle: Duration, now: Instant) {
+        if idle >= Duration::from_secs(300) {
+            self.idle_deferred = true;
+            self.return_grace_until = None;
+        } else if self.idle_deferred {
+            self.idle_deferred = false;
+            // Start once at the observed return input, not on each subsequent keystroke.
+            self.return_grace_until = Some(now - idle + Duration::from_secs(30));
         }
     }
 
@@ -84,8 +103,14 @@ impl Scheduler {
         match event {
             SystemEvent::Locked(value) => self.locked = value,
             SystemEvent::Sleeping(value) => self.sleeping = value,
+            SystemEvent::Silenced(value) => {
+                if self.is_silenced == value {
+                    return;
+                }
+                self.is_silenced = value;
+            }
         }
-        if self.locked || self.sleeping {
+        if self.locked || self.sleeping || self.is_silenced {
             if let Some((id, _, _)) = self.active {
                 self.finish(id, now);
             } else {
@@ -95,7 +120,7 @@ impl Scheduler {
     }
 
     pub fn preview_if_current(&mut self, generation: u64, now: Instant) -> bool {
-        if self.generation != generation || self.locked || self.sleeping {
+        if self.generation != generation || self.locked || self.sleeping || self.is_silenced {
             return false;
         }
         self.preview(now);
@@ -104,7 +129,7 @@ impl Scheduler {
 
     pub fn preview(&mut self, now: Instant) -> u64 {
         self.advance_clock(now);
-        if self.locked || self.sleeping {
+        if self.locked || self.sleeping || self.is_silenced {
             return self.generation;
         }
 
@@ -139,10 +164,13 @@ impl Scheduler {
                 return outcome;
             }
             self.paused_until = None;
+            self.pause_deadline = None;
             self.next_due = now + Duration::from_secs(self.config.interval_secs);
         }
         if self.active.is_none()
             && now >= self.next_due
+            && !self.idle_deferred
+            && self.return_grace_until.is_none_or(|until| now >= until)
             && !self.is_silenced
             && !self.locked
             && !self.sleeping
@@ -153,7 +181,36 @@ impl Scheduler {
         outcome
     }
 
+    /// Wall time remains authoritative even when the monotonic clock stops in sleep.
+    pub fn refresh_pause(&mut self, wall_now: u64, now: Instant) {
+        if let Some(deadline) = self.pause_deadline {
+            if deadline <= wall_now {
+                self.pause(0, now);
+            } else {
+                self.paused_until = Some(now + Duration::from_secs(deadline - wall_now));
+            }
+        }
+    }
+
+    pub fn pause_deadline(&self) -> Option<u64> {
+        self.pause_deadline
+    }
+
+    /// Restore a persisted Unix deadline using the current wall and monotonic clocks.
+    pub fn restore_pause(&mut self, deadline: Option<u64>, wall_now: u64, now: Instant) {
+        let deadline = deadline.filter(|until| *until > wall_now);
+        self.pause(deadline.map(|until| until - wall_now).unwrap_or(0), now);
+        self.pause_deadline = deadline;
+    }
+
     pub fn pause(&mut self, seconds: u64, now: Instant) {
+        self.advance_clock(now);
+        // A resumed interval replaces any previously deferred reminder.
+        self.return_grace_until = None;
+        self.idle_deferred = false;
+        // Invalidate preview requests that are still preparing native windows.
+        self.generation += 1;
+        self.pause_deadline = None;
         if let Some((id, _, _)) = self.active {
             self.finish(id, now);
         }
@@ -280,6 +337,158 @@ mod tests {
         scheduler.system_event(SystemEvent::Sleeping(true), fog);
         assert!(scheduler.snapshot(fog).eraser.strokes.is_empty());
         assert!(!scheduler.set_eraser_held(id, true, fog));
+    }
+
+    #[test]
+    fn fullscreen_defers_one_reminder_and_respects_return_grace_and_display_interval() {
+        let now = Instant::now();
+        let mut config = DaemonConfig::default();
+        config.interval_secs = 60;
+        let mut scheduler = Scheduler::new(config, now);
+        scheduler.system_event(SystemEvent::Silenced(true), now);
+        scheduler.tick(now + Duration::from_secs(60));
+        scheduler.idle_for(Duration::from_secs(300), now + Duration::from_secs(600));
+        scheduler.tick(now + Duration::from_secs(600));
+        assert_eq!(scheduler.snapshot(now).round_id, None);
+        scheduler.system_event(SystemEvent::Silenced(false), now + Duration::from_secs(600));
+        scheduler.idle_for(Duration::ZERO, now + Duration::from_secs(601));
+        scheduler.tick(now + Duration::from_secs(630));
+        assert_eq!(scheduler.snapshot(now).round_id, None);
+        scheduler.tick(now + Duration::from_secs(631));
+        assert!(scheduler.snapshot(now).round_id.is_some());
+        scheduler.tick(now + Duration::from_secs(634));
+        scheduler.tick(now + Duration::from_secs(690));
+        assert_eq!(scheduler.snapshot(now).round_id, None);
+        scheduler.tick(now + Duration::from_secs(691));
+        assert!(scheduler.snapshot(now).round_id.is_some());
+    }
+
+    #[test]
+    fn exiting_presentation_continues_use_time_without_a_new_interval() {
+        let now = Instant::now();
+        let mut config = DaemonConfig::default();
+        config.interval_secs = 60;
+        let mut scheduler = Scheduler::new(config, now);
+        scheduler.system_event(SystemEvent::Silenced(true), now + Duration::from_secs(10));
+        scheduler.system_event(SystemEvent::Silenced(false), now + Duration::from_secs(40));
+        scheduler.tick(now + Duration::from_secs(59));
+        assert_eq!(scheduler.snapshot(now).round_id, None);
+        scheduler.tick(now + Duration::from_secs(60));
+        assert!(scheduler.snapshot(now).round_id.is_some());
+    }
+
+    #[test]
+    fn silence_interrupts_round_and_rejects_delayed_preview() {
+        let now = Instant::now();
+        let mut scheduler = Scheduler::new(DaemonConfig::default(), now);
+        let id = scheduler.preview(now);
+        let generation = scheduler.snapshot(now).generation;
+        scheduler.system_event(SystemEvent::Silenced(true), now);
+        assert_eq!(scheduler.snapshot(now).round_id, None);
+        assert!(!scheduler.preview_if_current(generation, now));
+        scheduler.preview(now);
+        assert_eq!(scheduler.snapshot(now).round_id, None);
+        scheduler.system_event(SystemEvent::Silenced(false), now);
+        assert!(!scheduler.preview_if_current(generation, now));
+        assert!(!scheduler.finish(id, now));
+        assert_eq!(scheduler.tick(now + Duration::from_secs(3)), None);
+    }
+
+    #[test]
+    fn explicit_resume_discards_old_deferred_round_and_return_grace() {
+        let now = Instant::now();
+        let mut config = DaemonConfig::default();
+        config.interval_secs = 10;
+        let mut scheduler = Scheduler::new(config, now);
+        scheduler.idle_for(Duration::from_secs(300), now + Duration::from_secs(300));
+        scheduler.tick(now + Duration::from_secs(300));
+        scheduler.pause(60, now + Duration::from_secs(300));
+        scheduler.idle_for(Duration::ZERO, now + Duration::from_secs(301));
+        scheduler.pause(0, now + Duration::from_secs(302));
+        scheduler.tick(now + Duration::from_secs(311));
+        assert_eq!(scheduler.snapshot(now).round_id, None);
+        scheduler.tick(now + Duration::from_secs(312));
+        assert!(scheduler.snapshot(now).round_id.is_some());
+    }
+
+    #[test]
+    fn pause_deadline_expires_when_wall_clock_advances_during_sleep() {
+        let now = Instant::now();
+        let mut config = DaemonConfig::default();
+        config.interval_secs = 10;
+        let mut scheduler = Scheduler::new(config, now);
+        scheduler.restore_pause(Some(1060), 1000, now);
+        scheduler.refresh_pause(1061, now);
+        assert_eq!(scheduler.pause_deadline(), None);
+        scheduler.tick(now + Duration::from_secs(9));
+        assert_eq!(scheduler.snapshot(now).round_id, None);
+        scheduler.tick(now + Duration::from_secs(10));
+        assert!(scheduler.snapshot(now).round_id.is_some());
+    }
+
+    #[test]
+    fn five_minutes_idle_defers_due_reminder_but_reading_before_threshold_counts() {
+        let now = Instant::now();
+        let mut config = DaemonConfig::default();
+        config.interval_secs = 299;
+        let mut reading = Scheduler::new(config.clone(), now);
+        reading.idle_for(Duration::from_secs(299), now + Duration::from_secs(299));
+        reading.tick(now + Duration::from_secs(299));
+        assert!(reading.snapshot(now).round_id.is_some());
+        config.interval_secs = 300;
+        let mut away = Scheduler::new(config, now);
+        away.idle_for(Duration::from_secs(300), now + Duration::from_secs(300));
+        away.tick(now + Duration::from_secs(300));
+        assert_eq!(away.snapshot(now).round_id, None);
+    }
+
+    #[test]
+    fn missed_intervals_coalesce_and_return_grace_resets_interval_only_when_shown() {
+        let now = Instant::now();
+        let mut config = DaemonConfig::default();
+        config.interval_secs = 300;
+        let mut scheduler = Scheduler::new(config, now);
+        scheduler.idle_for(Duration::from_secs(300), now + Duration::from_secs(300));
+        scheduler.tick(now + Duration::from_secs(300));
+        scheduler.idle_for(Duration::from_secs(3600), now + Duration::from_secs(3600));
+        scheduler.tick(now + Duration::from_secs(3600));
+        assert_eq!(scheduler.snapshot(now).round_id, None);
+        scheduler.idle_for(Duration::ZERO, now + Duration::from_secs(3601));
+        scheduler.tick(now + Duration::from_secs(3601));
+        assert_eq!(scheduler.snapshot(now).round_id, None);
+        scheduler.idle_for(Duration::ZERO, now + Duration::from_secs(3630));
+        scheduler.tick(now + Duration::from_secs(3630));
+        assert_eq!(scheduler.snapshot(now).round_id, None);
+        scheduler.tick(now + Duration::from_secs(3631));
+        assert!(scheduler.snapshot(now).round_id.is_some());
+        scheduler.tick(now + Duration::from_secs(3634));
+        assert_eq!(scheduler.snapshot(now).round_id, None);
+        scheduler.tick(now + Duration::from_secs(3930));
+        assert_eq!(scheduler.snapshot(now).round_id, None);
+        scheduler.tick(now + Duration::from_secs(3931));
+        assert!(scheduler.snapshot(now).round_id.is_some());
+    }
+
+    #[test]
+    fn pause_invalidates_prepared_preview_and_restores_until_deadline() {
+        let now = Instant::now();
+        let mut config = DaemonConfig::default();
+        config.interval_secs = 10;
+        let mut scheduler = Scheduler::new(config.clone(), now);
+        let generation = scheduler.snapshot(now).generation;
+        scheduler.pause(60, now);
+        assert!(!scheduler.preview_if_current(generation, now));
+        let mut restarted = Scheduler::new(config, now);
+        restarted.restore_pause(Some(1060), 1030, now);
+        assert_eq!(restarted.pause_deadline(), Some(1060));
+        restarted.tick(now + Duration::from_secs(29));
+        assert_eq!(restarted.snapshot(now).round_id, None);
+        restarted.tick(now + Duration::from_secs(30));
+        assert_eq!(restarted.pause_deadline(), None);
+        restarted.tick(now + Duration::from_secs(39));
+        assert_eq!(restarted.snapshot(now).round_id, None);
+        restarted.tick(now + Duration::from_secs(40));
+        assert!(restarted.snapshot(now).round_id.is_some());
     }
 
     #[test]

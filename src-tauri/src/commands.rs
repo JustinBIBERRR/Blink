@@ -120,6 +120,37 @@ pub fn overlay_ready(
     ready.0.lock().unwrap().insert(window.label().to_string());
 }
 
+/// All pause entry points share persistence and lifecycle mutation under one lock.
+pub fn set_pause_shared(app: &tauri::AppHandle, seconds: u64) -> Result<(), String> {
+    let shared = app.state::<AppSharedState>();
+    let mut scheduler = shared.0.lock().unwrap();
+    let wall = crate::pause_store::wall_now();
+    let deadline = if seconds == 0 {
+        None
+    } else {
+        Some(wall.saturating_add(seconds))
+    };
+    crate::pause_store::save(&crate::pause_store::path(), deadline)?;
+    scheduler.restore_pause(deadline, wall, std::time::Instant::now());
+    drop(scheduler);
+    let handle = app.clone();
+    app.run_on_main_thread(move || {
+        crate::presentation::reconcile(&handle, &mut None);
+        crate::tray::sync_pause(&handle);
+    })
+    .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn set_pause(app: tauri::AppHandle, seconds: u64) -> Result<(), String> {
+    set_pause_shared(&app, seconds)
+}
+
+#[tauri::command]
+pub fn get_pause(shared: State<AppSharedState>) -> Option<u64> {
+    shared.0.lock().unwrap().pause_deadline()
+}
+
 #[tauri::command]
 pub fn finish_reminder(round_id: u64, shared: State<AppSharedState>) {
     shared

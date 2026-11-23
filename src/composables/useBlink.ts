@@ -1,6 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import { emit } from '@tauri-apps/api/event';
 import { ref, onMounted, onUnmounted } from 'vue';
 import type { Phase, StatsToday, DayStats, DaemonConfig } from '../types/blink';
 
@@ -114,5 +113,5 @@ export async function saveConfig(config: DaemonConfig): Promise<void> {
 }
 
 export async function pauseBlink(secs: number): Promise<void> {
-  return emit('blink://pause', secs);
+  return invoke('set_pause', { seconds: secs });
 }
