@@ -345,7 +345,6 @@ pub async fn overlay_geometry(window: tauri::WebviewWindow) -> Result<[f64; 3], 
 #[derive(serde::Serialize)]
 pub struct SettingsEnvironment {
     platform: &'static str,
-    accessibility_trusted: bool,
     reduce_transparency: bool,
     auto_start_supported: bool,
 }
@@ -360,7 +359,6 @@ pub async fn get_settings_environment(
         app.run_on_main_thread(move || {
             let _ = tx.send(SettingsEnvironment {
                 platform: "macos",
-                accessibility_trusted: unsafe { blink_accessibility_trusted() },
                 reduce_transparency: unsafe { blink_reduce_transparency() },
                 auto_start_supported: false,
             });
@@ -373,34 +371,13 @@ pub async fn get_settings_environment(
         let _ = app;
         Ok(SettingsEnvironment {
             platform: std::env::consts::OS,
-            accessibility_trusted: true,
             reduce_transparency: false,
             auto_start_supported: cfg!(target_os = "windows"),
         })
     }
 }
 
-#[tauri::command]
-pub async fn open_accessibility_settings(app: tauri::AppHandle) -> Result<(), String> {
-    #[cfg(target_os = "macos")]
-    {
-        let (tx, rx) = tokio::sync::oneshot::channel();
-        app.run_on_main_thread(move || {
-            let _ = tx.send(unsafe { blink_open_accessibility_settings() });
-        })
-        .map_err(|e| e.to_string())?;
-        if !rx.await.map_err(|e| e.to_string())? {
-            return Err("无法打开系统设置，请手动前往隐私与安全性中的辅助功能。".into());
-        }
-    }
-    #[cfg(not(target_os = "macos"))]
-    let _ = app;
-    Ok(())
-}
-
 #[cfg(target_os = "macos")]
 extern "C" {
-    fn blink_accessibility_trusted() -> bool;
     fn blink_reduce_transparency() -> bool;
-    fn blink_open_accessibility_settings() -> bool;
 }

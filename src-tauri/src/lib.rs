@@ -145,7 +145,6 @@ pub fn run() {
             commands::get_stats_month,
             commands::get_config,
             commands::get_settings_environment,
-            commands::open_accessibility_settings,
             commands::get_test_interval,
             commands::save_config,
             commands::close_panel,
