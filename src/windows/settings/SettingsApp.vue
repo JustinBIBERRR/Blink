@@ -84,7 +84,6 @@
             v-for="opt in PAUSE_OPTS"
             :key="opt.label"
             class="pill-btn"
-            :class="{ selected: isPaused && activePause === opt.label }"
             @click="triggerPause(opt)"
           >{{ opt.label }}</button>
         </div>
@@ -205,9 +204,8 @@ const PAUSE_OPTS = [
   { label: 'Today Off', secs: -1 },
 ] as const;
 
-const PAUSE_KEY = 'blink_pause_until';
 const pauseUntilTs = ref(0);
-const activePause = ref<string | null>(null);
+
 const now = ref(Date.now());
 let ticker: ReturnType<typeof setInterval>;
 
@@ -217,17 +215,9 @@ const pauseUntilFormatted = computed(() => {
   return new Date(pauseUntilTs.value).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 });
 
-function loadPauseState() {
-  const stored = localStorage.getItem(PAUSE_KEY);
-  if (stored) {
-    const data = JSON.parse(stored) as { ts: number; label: string };
-    if (data.ts > Date.now()) {
-      pauseUntilTs.value = data.ts;
-      activePause.value = data.label;
-    } else {
-      localStorage.removeItem(PAUSE_KEY);
-    }
-  }
+async function loadPauseState() {
+  const deadline = await invoke<number | null>('get_pause');
+  pauseUntilTs.value = deadline === null ? 0 : deadline * 1000;
 }
 
 async function triggerPause(opt: { label: string; secs: number }) {
@@ -239,25 +229,20 @@ async function triggerPause(opt: { label: string; secs: number }) {
     secs = Math.max(1, Math.floor((midnight.getTime() - Date.now()) / 1000));
   }
   await pauseBlink(secs);
-  const ts = Date.now() + secs * 1000;
-  localStorage.setItem(PAUSE_KEY, JSON.stringify({ ts, label: opt.label }));
-  pauseUntilTs.value = ts;
-  activePause.value = opt.label;
+  await loadPauseState();
 }
 
 async function resume() {
   await pauseBlink(0);
-  localStorage.removeItem(PAUSE_KEY);
-  pauseUntilTs.value = 0;
-  activePause.value = null;
+  await loadPauseState();
 }
 
 onMounted(async () => {
   const remote = await getConfig();
   Object.assign(config, remote);
   loadSlotsFromConfig();
-  loadPauseState();
-  ticker = setInterval(() => { now.value = Date.now(); }, 1000);
+  await loadPauseState();
+  ticker = setInterval(() => { now.value = Date.now(); void loadPauseState(); }, 1000);
 });
 
 onUnmounted(() => clearInterval(ticker));

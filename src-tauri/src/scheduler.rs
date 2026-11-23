@@ -27,6 +27,7 @@ pub struct Scheduler {
     generation: u64,
     next_due: Instant,
     paused_until: Option<Instant>,
+    pause_deadline: Option<u64>,
     pub is_silenced: bool,
     active: Option<(u64, Instant)>,
 }
@@ -42,6 +43,7 @@ impl Scheduler {
             generation: 0,
             active: None,
             paused_until: None,
+            pause_deadline: None,
             is_silenced: false,
         }
     }
@@ -113,6 +115,7 @@ impl Scheduler {
                 return outcome;
             }
             self.paused_until = None;
+            self.pause_deadline = None;
             self.next_due = now + Duration::from_secs(self.config.interval_secs);
         }
         if self.active.is_none()
@@ -127,7 +130,33 @@ impl Scheduler {
         outcome
     }
 
+    /// Wall time remains authoritative even when the monotonic clock stops in sleep.
+    pub fn refresh_pause(&mut self, wall_now: u64, now: Instant) {
+        if let Some(deadline) = self.pause_deadline {
+            if deadline <= wall_now {
+                self.pause(0, now);
+            } else {
+                self.paused_until = Some(now + Duration::from_secs(deadline - wall_now));
+            }
+        }
+    }
+
+    pub fn pause_deadline(&self) -> Option<u64> {
+        self.pause_deadline
+    }
+
+    /// Restore a persisted Unix deadline using the current wall and monotonic clocks.
+    pub fn restore_pause(&mut self, deadline: Option<u64>, wall_now: u64, now: Instant) {
+        let deadline = deadline.filter(|until| *until > wall_now);
+        self.pause(deadline.map(|until| until - wall_now).unwrap_or(0), now);
+        self.pause_deadline = deadline;
+    }
+
     pub fn pause(&mut self, seconds: u64, now: Instant) {
+        self.advance_clock(now);
+        // Invalidate preview requests that are still preparing native windows.
+        self.generation += 1;
+        self.pause_deadline = None;
         if let Some((id, _)) = self.active {
             self.finish(id, now);
         }
@@ -170,6 +199,43 @@ mod tests {
     use super::*;
     use crate::state::DaemonConfig;
     use std::time::{Duration, Instant};
+
+    #[test]
+    fn pause_deadline_expires_when_wall_clock_advances_during_sleep() {
+        let now = Instant::now();
+        let mut config = DaemonConfig::default();
+        config.interval_secs = 10;
+        let mut scheduler = Scheduler::new(config, now);
+        scheduler.restore_pause(Some(1060), 1000, now);
+        scheduler.refresh_pause(1061, now);
+        assert_eq!(scheduler.pause_deadline(), None);
+        scheduler.tick(now + Duration::from_secs(9));
+        assert_eq!(scheduler.snapshot(now).round_id, None);
+        scheduler.tick(now + Duration::from_secs(10));
+        assert!(scheduler.snapshot(now).round_id.is_some());
+    }
+
+    #[test]
+    fn pause_invalidates_prepared_preview_and_restores_until_deadline() {
+        let now = Instant::now();
+        let mut config = DaemonConfig::default();
+        config.interval_secs = 10;
+        let mut scheduler = Scheduler::new(config.clone(), now);
+        let generation = scheduler.snapshot(now).generation;
+        scheduler.pause(60, now);
+        assert!(!scheduler.preview_if_current(generation, now));
+        let mut restarted = Scheduler::new(config, now);
+        restarted.restore_pause(Some(1060), 1030, now);
+        assert_eq!(restarted.pause_deadline(), Some(1060));
+        restarted.tick(now + Duration::from_secs(29));
+        assert_eq!(restarted.snapshot(now).round_id, None);
+        restarted.tick(now + Duration::from_secs(30));
+        assert_eq!(restarted.pause_deadline(), None);
+        restarted.tick(now + Duration::from_secs(39));
+        assert_eq!(restarted.snapshot(now).round_id, None);
+        restarted.tick(now + Duration::from_secs(40));
+        assert!(restarted.snapshot(now).round_id.is_some());
+    }
 
     #[test]
     fn interrupt_invalidates_pending_preview_even_after_unlock() {

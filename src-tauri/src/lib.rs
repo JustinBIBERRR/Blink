@@ -3,6 +3,7 @@ mod config_store;
 mod daemon;
 mod db;
 mod hotkey;
+mod pause_store;
 mod presentation;
 mod scheduler;
 mod silence;
@@ -16,7 +17,6 @@ use daemon::SharedState;
 use db::Db;
 use scheduler::Scheduler;
 use std::sync::{Arc, Mutex};
-use tauri::Listener;
 
 pub fn run() {
     // Default to info-level logging unless overridden via RUST_LOG.
@@ -57,6 +57,12 @@ pub fn run() {
         std::time::Instant::now(),
     )));
 
+    shared_state.lock().unwrap().restore_pause(
+        pause_store::load(&pause_store::path()),
+        pause_store::wall_now(),
+        std::time::Instant::now(),
+    );
+
     let db_for_daemon = db.clone();
     let db_for_hotkey = db.clone();
     let state_clone = shared_state.clone();
@@ -87,6 +93,7 @@ pub fn run() {
                 let previous = event_previous.clone();
                 let _ = event_app.run_on_main_thread(move || {
                     presentation::reconcile(&handle, &mut previous.lock().unwrap());
+                    tray::sync_pause(&handle);
                 });
             });
             tauri::async_runtime::spawn(daemon::run(state_clone.clone(), move |outcome| {
@@ -97,6 +104,7 @@ pub fn run() {
                 let previous = previous.clone();
                 let _ = app_handle.run_on_main_thread(move || {
                     presentation::reconcile(&handle, &mut previous.lock().unwrap());
+                    tray::sync_pause(&handle);
                 });
             }));
 
@@ -119,16 +127,6 @@ pub fn run() {
                 }
             });
 
-            let state_for_pause = state_clone.clone();
-            app.listen("blink://pause", move |event: tauri::Event| {
-                if let Ok(secs) = serde_json::from_str::<u64>(event.payload()) {
-                    state_for_pause
-                        .lock()
-                        .unwrap()
-                        .pause(secs, std::time::Instant::now());
-                }
-            });
-
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -140,6 +138,8 @@ pub fn run() {
             commands::close_panel,
             commands::preview_reminder,
             commands::get_reminder,
+            commands::get_pause,
+            commands::set_pause,
             commands::overlay_ready,
         ])
         .run(tauri::generate_context!())
