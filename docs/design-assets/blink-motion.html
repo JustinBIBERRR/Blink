@@ -1,0 +1,274 @@
+<div id="blink-motion-review">
+  <div class="viz-row motion-options" role="group" aria-label="动效方案">
+    <button class="btn" data-mode="edge" aria-pressed="true">柔和边缘 · 3 秒</button>
+    <button class="btn" data-mode="fog" aria-pressed="false">预告 → 冷凝起雾</button>
+  </div>
+  <canvas width="1000" height="530" role="img" aria-label="工作桌面上的 Blink 提醒动效"></canvas>
+  <div class="motion-playback">
+    <button class="btn btn-primary" type="button" data-play>从头播放</button>
+    <label class="motion-time"><span class="sr-only">播放进度</span><input class="form-range" type="range" min="0" max="3" step="0.01" value="1.25"></label>
+    <output class="tabular-nums" data-time>1.3 / 3 秒</output>
+  </div>
+  <p class="text-small text-muted" data-phase aria-live="polite"></p>
+</div>
+<style>
+#blink-motion-review { display: grid; gap: 10px; }
+#blink-motion-review canvas { display: block; width: 100%; height: auto; border-radius: 9px; }
+#blink-motion-review .motion-playback { display: flex; align-items: center; gap: 12px; }
+#blink-motion-review .motion-time { flex: 1; min-width: 0; }
+#blink-motion-review .motion-time input { display: block; width: 100%; }
+#blink-motion-review output { min-width: 8ch; text-align: end; }
+</style>
+<script>
+(() => {
+  const root = document.getElementById('blink-motion-review');
+  const canvas = root.querySelector('canvas');
+  const ctx = canvas.getContext('2d');
+  const play = root.querySelector('[data-play]');
+  const slider = root.querySelector('input');
+  const timeLabel = root.querySelector('[data-time]');
+  const phaseLabel = root.querySelector('[data-phase]');
+  const modes = [...root.querySelectorAll('[data-mode]')];
+  const { width: w, height: h } = canvas;
+  const layer = (width, height) => Object.assign(document.createElement('canvas'), { width, height });
+  const desktop = layer(w, h);
+  const d = desktop.getContext('2d');
+  const frost = layer(w, h);
+  const f = frost.getContext('2d');
+  const mask = layer(260, 138);
+  const m = mask.getContext('2d');
+  const pixels = m.createImageData(mask.width, mask.height);
+  const threshold = new Float32Array(mask.width * mask.height);
+  const grain = new Float32Array(threshold.length);
+  const small = layer(82, 44);
+  const blurred = layer(w, h);
+  const b = blurred.getContext('2d');
+  let seed = 843089;
+  const random = () => {
+    seed = (Math.imul(1664525, seed) + 1013904223) >>> 0;
+    return seed / 4294967296;
+  };
+  const clamp = (v) => Math.min(1, Math.max(0, v));
+  const smooth = (a, z, v) => {
+    const t = clamp((v - a) / (z - a));
+    return t * t * (3 - 2 * t);
+  };
+  let mode = 'edge';
+  let time = 1.25;
+  let frame = 0;
+
+  function rect(context, x, y, width, height, radius, fill) {
+    context.beginPath();
+    context.roundRect(x, y, width, height, radius);
+    context.fillStyle = fill;
+    context.fill();
+  }
+
+  function fillText(context, word, x, y, font, color) {
+    context.fillStyle = color;
+    context.font = font;
+    context.fillText(word, x, y);
+  }
+
+  function drawDesktop() {
+    const backdrop = d.createLinearGradient(0, 0, w, h);
+    backdrop.addColorStop(0, '#152533');
+    backdrop.addColorStop(0.55, '#344957');
+    backdrop.addColorStop(1, '#18222d');
+    d.fillStyle = backdrop;
+    d.fillRect(0, 0, w, h);
+    rect(d, 180, 79, 640, 391, 12, '#121b22');
+    rect(d, 185, 70, 630, 390, 12, '#f0f2f2');
+    rect(d, 185, 70, 630, 50, [12, 12, 0, 0], '#dfe6e8');
+    for (let index = 0; index < 3; index++) {
+      rect(d, 205 + index * 17, 91, 8, 8, 4, ['#798f98', '#a6b8be', '#bdcbd0'][index]);
+    }
+    fillText(d, '工作备忘', 443, 102, '500 15px system-ui', '#3b4b52');
+    fillText(d, '本周设计记录', 233, 183, '500 30px system-ui', '#263941');
+    const lines = ['整理本周评审反馈', '确认桌面端的交互流程', '更新下一版设计稿', '准备周五同步'];
+    for (const [index, line] of lines.entries()) {
+      const y = 227 + index * 35;
+      d.strokeStyle = '#82949a';
+      d.strokeRect(234, y - 12, 12, 12);
+      fillText(d, line, 258, y, '16px system-ui', '#3d535c');
+    }
+    d.fillStyle = '#c3cfd1';
+    d.fillRect(233, 371, 425, 1);
+    fillText(d, '下一步：确认动效后再进入实现。', 233, 402, '15px system-ui', '#546972');
+    small.getContext('2d').drawImage(desktop, 0, 0, small.width, small.height);
+    b.imageSmoothingQuality = 'high';
+    b.drawImage(small, 0, 0, w, h);
+    b.fillStyle = 'rgba(166,192,208,.47)';
+    b.fillRect(0, 0, w, h);
+  }
+
+  function field(x, y) {
+    const left = x * 1.13 + 0.027 * Math.sin(19 * y) + 0.017 * Math.cos(43 * y);
+    const right = (1 - x) * 0.99 + 0.04 * Math.sin(17 * y + 2) + 0.014 * Math.cos(45 * y);
+    const top = y * 0.88 + 0.036 * Math.sin(16 * x) + 0.016 * Math.cos(39 * x + 1);
+    const bottom = (1 - y) * 1.10 + 0.032 * Math.cos(21 * x + 1) + 0.018 * Math.sin(42 * x);
+    return Math.max(0, Math.min(left, right, top, bottom));
+  }
+
+  drawDesktop();
+  for (let i = 0; i < threshold.length; i++) {
+    threshold[i] = field((i % mask.width) / mask.width, Math.floor(i / mask.width) / mask.height);
+    grain[i] = random() - 0.5;
+    pixels.data[i * 4] = 255;
+    pixels.data[i * 4 + 1] = 255;
+    pixels.data[i * 4 + 2] = 255;
+  }
+
+  const beads = Array.from({ length: 68 }, () => {
+    const side = Math.floor(random() * 4);
+    const offset = 0.009 + random() * 0.12;
+    const position = random();
+    const x = side === 0 ? offset : side === 1 ? 1 - offset : position;
+    const y = side === 2 ? offset : side === 3 ? 1 - offset : position;
+    return { x: x * w, y: y * h, r: 0.8 + random() ** 3 * 3.8, delay: field(x, y) };
+  });
+  const crystals = Array.from({ length: 30 }, (_, index) => {
+    const right = index % 2 === 0;
+    const bottom = index % 4 < 2;
+    const x = (random() ** 1.5 * 150 + 4) * (right ? -1 : 1) + (right ? w : 0);
+    const y = (random() ** 2 * 46 + 2) * (bottom ? -1 : 1) + (bottom ? h : 0);
+    return { x, y, direction: (bottom ? -1 : 1) * (0.47 + random() * 2.1), length: 5 + random() ** 1.5 * 27, delay: 0.006 + random() * 0.09 };
+  });
+
+  function crystalStroke(crystal, growth, strength) {
+    ctx.save();
+    ctx.translate(crystal.x, crystal.y);
+    ctx.rotate(crystal.direction);
+    const length = crystal.length * growth;
+    ctx.globalAlpha = 0.45 * strength * growth;
+    ctx.strokeStyle = '#d7ebf5';
+    ctx.lineWidth = 0.7;
+    ctx.beginPath();
+    ctx.moveTo(0, 0);
+    ctx.lineTo(length, 0);
+    for (const fraction of [0.30, 0.54, 0.74]) {
+      const x = fraction * length;
+      const twig = (1 - fraction) * length * 0.47;
+      ctx.moveTo(x + twig, -twig);
+      ctx.lineTo(x, 0);
+      ctx.lineTo(x + twig, twig);
+    }
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  function edgeCue(level) {
+    if (level <= 0) return;
+    ctx.save();
+    ctx.globalAlpha = level;
+    for (const [x1, y1, x2, y2, rx, ry, rw, rh] of [
+      [0, 0, 0, 21, 0, 0, w, 21], [0, h, 0, h - 21, 0, h - 21, w, 21],
+      [0, 0, 21, 0, 0, 0, 21, h], [w, 0, w - 21, 0, w - 21, 0, 21, h],
+    ]) {
+      const light = ctx.createLinearGradient(x1, y1, x2, y2);
+      light.addColorStop(0, 'rgba(180, 220, 248, .76)');
+      light.addColorStop(0.25, 'rgba(153, 201, 233, .29)');
+      light.addColorStop(1, 'rgba(153, 201, 233, 0)');
+      ctx.fillStyle = light;
+      ctx.fillRect(rx, ry, rw, rh);
+    }
+    ctx.restore();
+  }
+
+  function drawFog(front, strength) {
+    if (strength <= 0) return;
+    for (let i = 0; i < threshold.length; i++) {
+      const covered = smooth(threshold[i] - 0.014, threshold[i] + 0.065, front);
+      pixels.data[i * 4 + 3] = Math.round(255 * covered * (0.94 + 0.10 * grain[i]));
+    }
+    m.putImageData(pixels, 0, 0);
+    f.clearRect(0, 0, w, h);
+    f.drawImage(blurred, 0, 0);
+    f.globalCompositeOperation = 'destination-in';
+    f.drawImage(mask, 0, 0, w, h);
+    f.globalCompositeOperation = 'source-over';
+    ctx.save();
+    ctx.globalAlpha = strength;
+    ctx.drawImage(frost, 0, 0);
+    ctx.globalAlpha = 1;
+    for (const crystal of crystals) {
+      crystalStroke(crystal, smooth(crystal.delay, crystal.delay + 0.12, front), strength);
+    }
+    for (const bead of beads) {
+      const visible = smooth(bead.delay + 0.018, bead.delay + 0.10, front);
+      if (visible <= 0) continue;
+      ctx.globalAlpha = strength * visible * 0.78;
+      const lens = ctx.createRadialGradient(bead.x - bead.r * 0.28, bead.y - bead.r * 0.35, 0, bead.x, bead.y, bead.r);
+      lens.addColorStop(0, 'rgba(238, 250, 255, .94)');
+      lens.addColorStop(0.37, 'rgba(184, 219, 234, .52)');
+      lens.addColorStop(0.73, 'rgba(78, 105, 124, .22)');
+      lens.addColorStop(1, 'rgba(31, 55, 72, .73)');
+      ctx.fillStyle = lens;
+      ctx.beginPath();
+      ctx.ellipse(bead.x, bead.y, bead.r * 0.86, bead.r, 0, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.restore();
+  }
+
+  function render() {
+    ctx.drawImage(desktop, 0, 0);
+    const total = mode === 'edge' ? 3 : 23;
+    let phase;
+    const cue = smooth(0, 0.85, time) * (1 - smooth(1.25, 3, time));
+    if (mode === 'edge' || time < 3) {
+      edgeCue(cue * 0.74);
+      phase = mode === 'edge' ? '边缘缓慢亮起并淡出，正文保持清晰' : '起雾前 3 秒 · 冷光沿边缘亮起';
+    } else {
+      const since = time - 3;
+      const progress = smooth(0, 5, since);
+      const strength = smooth(0, 0.65, since) * (1 - smooth(17, 20, since));
+      drawFog(0.012 + 0.57 * progress, strength);
+      edgeCue((1 - smooth(0, 3.8, since)) * smooth(0, 0.72, since) * 0.29);
+      phase = since < 5 ? '细霜从四边不均匀地向内扩张' : since < 17 ? '半透明水汽覆盖玻璃，水珠保持静止' : '霜雾与水珠一起淡出';
+    }
+    slider.value = time;
+    timeLabel.value = `${time.toFixed(1)} / ${total} 秒`;
+    if (time >= total) phase = '提示结束，桌面恢复清晰';
+    if (phaseLabel.textContent !== phase) phaseLabel.textContent = phase;
+  }
+
+  function stop() {
+    cancelAnimationFrame(frame);
+    frame = 0;
+    play.textContent = '从头播放';
+  }
+
+  for (const button of modes) {
+    button.addEventListener('click', () => {
+      stop();
+      mode = button.dataset.mode;
+      slider.max = mode === 'edge' ? 3 : 23;
+      time = mode === 'edge' ? 1.25 : 5.55;
+      for (const option of modes) option.setAttribute('aria-pressed', String(option === button));
+      render();
+    });
+  }
+
+  slider.addEventListener('input', () => {
+    stop();
+    time = Number(slider.value);
+    render();
+  });
+
+  play.addEventListener('click', () => {
+    if (frame) { stop(); return; }
+    const start = performance.now();
+    play.textContent = '暂停';
+    const step = (now) => {
+      time = Math.min(Number(slider.max), (now - start) / 1000);
+      render();
+      if (time >= Number(slider.max)) stop();
+      else frame = requestAnimationFrame(step);
+    };
+    frame = requestAnimationFrame(step);
+  });
+
+  render();
+})();
+</script>
