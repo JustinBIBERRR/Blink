@@ -14,8 +14,13 @@ pub async fn run(
         sleep(Duration::from_millis(50)).await;
         let outcome = {
             let mut scheduler = shared.lock().unwrap();
-            scheduler.is_silenced = crate::silence::SilenceChecker::new().is_silenced();
             let now = std::time::Instant::now();
+            scheduler.system_event(
+                crate::scheduler::SystemEvent::Silenced(
+                    crate::silence::SilenceChecker::new().is_silenced(),
+                ),
+                now,
+            );
             if let Some(idle) = crate::input_idle::duration() {
                 scheduler.idle_for(idle, now);
             }

@@ -18,6 +18,7 @@ pub struct ReminderSnapshot {
 pub enum SystemEvent {
     Locked(bool),
     Sleeping(bool),
+    Silenced(bool),
 }
 
 pub struct Scheduler {
@@ -30,7 +31,7 @@ pub struct Scheduler {
     generation: u64,
     next_due: Instant,
     paused_until: Option<Instant>,
-    pub is_silenced: bool,
+    is_silenced: bool,
     active: Option<(u64, Instant, ReminderMode)>,
 }
 
@@ -83,8 +84,14 @@ impl Scheduler {
         match event {
             SystemEvent::Locked(value) => self.locked = value,
             SystemEvent::Sleeping(value) => self.sleeping = value,
+            SystemEvent::Silenced(value) => {
+                if self.is_silenced == value {
+                    return;
+                }
+                self.is_silenced = value;
+            }
         }
-        if self.locked || self.sleeping {
+        if self.locked || self.sleeping || self.is_silenced {
             if let Some((id, _, _)) = self.active {
                 self.finish(id, now);
             } else {
@@ -94,7 +101,7 @@ impl Scheduler {
     }
 
     pub fn preview_if_current(&mut self, generation: u64, now: Instant) -> bool {
-        if self.generation != generation || self.locked || self.sleeping {
+        if self.generation != generation || self.locked || self.sleeping || self.is_silenced {
             return false;
         }
         self.preview(now);
@@ -103,7 +110,7 @@ impl Scheduler {
 
     pub fn preview(&mut self, now: Instant) -> u64 {
         self.advance_clock(now);
-        if self.locked || self.sleeping {
+        if self.locked || self.sleeping || self.is_silenced {
             return self.generation;
         }
 
@@ -206,6 +213,61 @@ mod tests {
     use super::*;
     use crate::state::DaemonConfig;
     use std::time::{Duration, Instant};
+
+    #[test]
+    fn fullscreen_defers_one_reminder_and_respects_return_grace_and_display_interval() {
+        let now = Instant::now();
+        let mut config = DaemonConfig::default();
+        config.interval_secs = 60;
+        let mut scheduler = Scheduler::new(config, now);
+        scheduler.system_event(SystemEvent::Silenced(true), now);
+        scheduler.tick(now + Duration::from_secs(60));
+        scheduler.idle_for(Duration::from_secs(300), now + Duration::from_secs(600));
+        scheduler.tick(now + Duration::from_secs(600));
+        assert_eq!(scheduler.snapshot(now).round_id, None);
+        scheduler.system_event(SystemEvent::Silenced(false), now + Duration::from_secs(600));
+        scheduler.idle_for(Duration::ZERO, now + Duration::from_secs(601));
+        scheduler.tick(now + Duration::from_secs(630));
+        assert_eq!(scheduler.snapshot(now).round_id, None);
+        scheduler.tick(now + Duration::from_secs(631));
+        assert!(scheduler.snapshot(now).round_id.is_some());
+        scheduler.tick(now + Duration::from_secs(634));
+        scheduler.tick(now + Duration::from_secs(690));
+        assert_eq!(scheduler.snapshot(now).round_id, None);
+        scheduler.tick(now + Duration::from_secs(691));
+        assert!(scheduler.snapshot(now).round_id.is_some());
+    }
+
+    #[test]
+    fn exiting_presentation_continues_use_time_without_a_new_interval() {
+        let now = Instant::now();
+        let mut config = DaemonConfig::default();
+        config.interval_secs = 60;
+        let mut scheduler = Scheduler::new(config, now);
+        scheduler.system_event(SystemEvent::Silenced(true), now + Duration::from_secs(10));
+        scheduler.system_event(SystemEvent::Silenced(false), now + Duration::from_secs(40));
+        scheduler.tick(now + Duration::from_secs(59));
+        assert_eq!(scheduler.snapshot(now).round_id, None);
+        scheduler.tick(now + Duration::from_secs(60));
+        assert!(scheduler.snapshot(now).round_id.is_some());
+    }
+
+    #[test]
+    fn silence_interrupts_round_and_rejects_delayed_preview() {
+        let now = Instant::now();
+        let mut scheduler = Scheduler::new(DaemonConfig::default(), now);
+        let id = scheduler.preview(now);
+        let generation = scheduler.snapshot(now).generation;
+        scheduler.system_event(SystemEvent::Silenced(true), now);
+        assert_eq!(scheduler.snapshot(now).round_id, None);
+        assert!(!scheduler.preview_if_current(generation, now));
+        scheduler.preview(now);
+        assert_eq!(scheduler.snapshot(now).round_id, None);
+        scheduler.system_event(SystemEvent::Silenced(false), now);
+        assert!(!scheduler.preview_if_current(generation, now));
+        assert!(!scheduler.finish(id, now));
+        assert_eq!(scheduler.tick(now + Duration::from_secs(3)), None);
+    }
 
     #[test]
     fn five_minutes_idle_defers_due_reminder_but_reading_before_threshold_counts() {
