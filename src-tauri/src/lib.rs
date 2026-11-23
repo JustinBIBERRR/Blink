@@ -6,6 +6,7 @@ mod db;
 mod hotkey;
 mod input_idle;
 mod pause_store;
+mod notifications;
 mod presentation;
 mod scheduler;
 mod silence;

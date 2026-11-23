@@ -24,6 +24,7 @@ export interface DayStats {
 
 export interface DaemonConfig {
   reminder_mode: 'soft' | 'fog';
+  fog_notifications: boolean;
   interval_secs: number;
   warning_secs: number;
   spreading_secs: number;
