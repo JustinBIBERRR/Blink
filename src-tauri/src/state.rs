@@ -43,7 +43,9 @@ pub struct DaemonConfig {
     pub auto_start: bool,
 }
 
-fn enabled() -> bool { true }
+fn enabled() -> bool {
+    true
+}
 
 impl Default for DaemonConfig {
     fn default() -> Self {

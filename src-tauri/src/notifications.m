@@ -1,11 +1,26 @@
 #import <Foundation/Foundation.h>
 #import <UserNotifications/UserNotifications.h>
 
+@interface BlinkNotificationDelegate : NSObject <UNUserNotificationCenterDelegate>
+@end
+@implementation BlinkNotificationDelegate
+- (void)userNotificationCenter:(UNUserNotificationCenter *)center
+      willPresentNotification:(UNNotification *)notification
+        withCompletionHandler:(void (^)(UNNotificationPresentationOptions))completion {
+    (void)center; (void)notification;
+    completion(UNNotificationPresentationOptionBanner | UNNotificationPresentationOptionList);
+}
+@end
+
 void blink_silent_notification(const char *body) {
     @autoreleasepool {
         // UNUserNotificationCenter requires a packaged application identity.
         if (!NSBundle.mainBundle.bundleIdentifier) return;
         UNUserNotificationCenter *center = UNUserNotificationCenter.currentNotificationCenter;
+        static BlinkNotificationDelegate *delegate;
+        static dispatch_once_t once;
+        dispatch_once(&once, ^{ delegate = [BlinkNotificationDelegate new]; });
+        center.delegate = delegate;
         UNMutableNotificationContent *content = [UNMutableNotificationContent new];
         content.title = @"Blink";
         content.body = [NSString stringWithUTF8String:body];

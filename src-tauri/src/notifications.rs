@@ -4,7 +4,9 @@ pub fn submit(app: &tauri::AppHandle, body: &'static str) {
     {
         let _ = app;
         if let Ok(body) = std::ffi::CString::new(body) {
-            unsafe { blink_silent_notification(body.as_ptr()); }
+            unsafe {
+                blink_silent_notification(body.as_ptr());
+            }
         }
     }
     #[cfg(target_os = "windows")]
@@ -25,7 +27,24 @@ extern "C" {
 
 #[cfg(target_os = "windows")]
 fn windows_submit(app_id: &str, body: &str) -> windows::core::Result<()> {
-    use windows::{core::HSTRING, Data::Xml::Dom::XmlDocument, UI::Notifications::{ToastNotification, ToastNotificationManager}};
+    use windows::Win32::System::Com::{CoInitializeEx, CoUninitialize, COINIT_MULTITHREADED};
+    use windows::{
+        core::HSTRING,
+        Data::Xml::Dom::XmlDocument,
+        UI::Notifications::{ToastNotification, ToastNotificationManager},
+    };
+    unsafe {
+        CoInitializeEx(None, COINIT_MULTITHREADED).ok()?;
+    }
+    struct Apartment;
+    impl Drop for Apartment {
+        fn drop(&mut self) {
+            unsafe {
+                CoUninitialize();
+            }
+        }
+    }
+    let _apartment = Apartment;
     // Both messages are application constants, not user-controlled XML.
     let xml = XmlDocument::new()?;
     xml.LoadXml(&HSTRING::from(format!(

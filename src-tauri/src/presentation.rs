@@ -86,7 +86,10 @@ pub fn reconcile(
     let state = app.state::<AppSharedState>();
     let (snapshot, notifications): (ReminderSnapshot, _) = {
         let mut scheduler = state.0.lock().unwrap();
-        (scheduler.snapshot(std::time::Instant::now()), scheduler.take_notifications())
+        (
+            scheduler.snapshot(std::time::Instant::now()),
+            scheduler.take_notifications(),
+        )
     };
     for message in notifications {
         crate::notifications::submit(app, message);
