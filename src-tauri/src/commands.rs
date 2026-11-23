@@ -60,8 +60,18 @@ pub fn save_config(
     let enable_modifier = new_config.eraser_enabled
         && new_config.eraser_modifier.is_some()
         && (!previous.eraser_enabled || previous.eraser_modifier != new_config.eraser_modifier);
-    crate::config_store::save(&new_config)?;
-    crate::startup::set_auto_start(auto_start).map_err(|e| e.to_string())?;
+    let startup_changed = auto_start != previous.auto_start;
+    if startup_changed {
+        crate::startup::set_auto_start(auto_start).map_err(|e| e.to_string())?;
+    }
+    if let Err(error) = crate::config_store::save(&new_config) {
+        if startup_changed {
+            if let Err(rollback) = crate::startup::set_auto_start(previous.auto_start) {
+                log::warn!("Could not restore startup preference after save failure: {rollback}");
+            }
+        }
+        return Err(error);
+    }
     *config.0.lock().unwrap() = new_config.clone();
     shared.0.lock().unwrap().update_config(
         runtime.scheduler_config(&new_config),
@@ -341,7 +351,9 @@ pub struct SettingsEnvironment {
 }
 
 #[tauri::command]
-pub async fn get_settings_environment(app: tauri::AppHandle) -> Result<SettingsEnvironment, String> {
+pub async fn get_settings_environment(
+    app: tauri::AppHandle,
+) -> Result<SettingsEnvironment, String> {
     #[cfg(target_os = "macos")]
     {
         let (tx, rx) = tokio::sync::oneshot::channel();
@@ -352,7 +364,8 @@ pub async fn get_settings_environment(app: tauri::AppHandle) -> Result<SettingsE
                 reduce_transparency: unsafe { blink_reduce_transparency() },
                 auto_start_supported: false,
             });
-        }).map_err(|e| e.to_string())?;
+        })
+        .map_err(|e| e.to_string())?;
         rx.await.map_err(|e| e.to_string())
     }
     #[cfg(not(target_os = "macos"))]
@@ -374,7 +387,8 @@ pub async fn open_accessibility_settings(app: tauri::AppHandle) -> Result<(), St
         let (tx, rx) = tokio::sync::oneshot::channel();
         app.run_on_main_thread(move || {
             let _ = tx.send(unsafe { blink_open_accessibility_settings() });
-        }).map_err(|e| e.to_string())?;
+        })
+        .map_err(|e| e.to_string())?;
         if !rx.await.map_err(|e| e.to_string())? {
             return Err("无法打开系统设置，请手动前往隐私与安全性中的辅助功能。".into());
         }
