@@ -6,12 +6,6 @@
 
   <!-- Bottom hints (sit at the bottom edge = inside the frame). -->
   <template v-if="phase === 'spreading' || phase === 'holding' || phase === 'dissolving'">
-    <div v-if="phase === 'spreading' && hotkey" class="bottom-hint bright">
-      <kbd>{{ hotkey }}</kbd> 跳过
-    </div>
-    <div v-if="phase === 'holding' && hotkey" class="bottom-hint dim">
-      <kbd>{{ hotkey }}</kbd> 提前退出
-    </div>
     <div v-if="phase === 'dissolving'" class="bottom-hint green">
       ✓ 护眼完成，恢复中…
     </div>
@@ -21,7 +15,7 @@
 <script setup lang="ts">
 import type { Phase } from '../../types/blink';
 
-defineProps<{ phase: Phase; hotkey: string }>();
+defineProps<{ phase: Phase }>();
 </script>
 
 <style scoped>
@@ -58,16 +52,5 @@ defineProps<{ phase: Phase; hotkey: string }>();
   pointer-events: none;
   text-shadow: 0 1px 6px rgba(0, 0, 0, 0.8);
 }
-.bottom-hint.bright { color: rgba(205, 214, 244, 0.75); }
-.bottom-hint.dim    { color: rgba(205, 214, 244, 0.3); border-color: rgba(255, 255, 255, 0.04); }
 .bottom-hint.green  { color: rgba(166, 227, 161, 0.8); }
-kbd {
-  background: rgba(255, 255, 255, 0.12);
-  border: 1px solid rgba(255, 255, 255, 0.2);
-  border-radius: 3px;
-  padding: 1px 6px;
-  font-family: 'JetBrains Mono', monospace;
-  font-size: 10px;
-  color: rgba(205, 214, 244, 0.75);
-}
 </style>

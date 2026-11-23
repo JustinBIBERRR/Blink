@@ -38,6 +38,11 @@ pub fn get_config(config: State<AppConfig>) -> DaemonConfig {
 }
 
 #[tauri::command]
+pub fn get_test_interval(runtime: State<crate::config_store::RuntimeConfig>) -> Option<u64> {
+    runtime.test_interval_secs
+}
+
+#[tauri::command]
 pub fn close_panel(window: tauri::Window) -> Result<(), String> {
     window.hide().map_err(|e| e.to_string())
 }
@@ -46,21 +51,17 @@ pub fn close_panel(window: tauri::Window) -> Result<(), String> {
 pub fn save_config(
     app: tauri::AppHandle,
     new_config: DaemonConfig,
+    runtime: State<crate::config_store::RuntimeConfig>,
     config: State<AppConfig>,
     shared: State<AppSharedState>,
 ) -> Result<(), String> {
     let auto_start = new_config.auto_start;
     *config.0.lock().unwrap() = new_config.clone();
-    shared
-        .0
-        .lock()
-        .unwrap()
-        .update_config(new_config.clone(), std::time::Instant::now());
-    // Push the new combo to the live keyboard hook and persist to disk.
-    crate::hotkey::set_combo(crate::hotkey::parse_combo(&new_config.hotkey));
-    if !new_config.hotkey.is_empty()
-        || (new_config.eraser_enabled && new_config.eraser_modifier.is_some())
-    {
+    shared.0.lock().unwrap().update_config(
+        runtime.scheduler_config(&new_config),
+        std::time::Instant::now(),
+    );
+    if new_config.eraser_enabled && new_config.eraser_modifier.is_some() {
         app.run_on_main_thread(|| {
             crate::eraser_input::available();
         })
@@ -76,49 +77,23 @@ pub fn get_reminder(shared: State<AppSharedState>) -> crate::scheduler::Reminder
 }
 
 #[tauri::command]
-pub async fn preview_reminder(
-    app: tauri::AppHandle,
-    shared: State<'_, AppSharedState>,
-) -> Result<(), String> {
-    let generation = shared
-        .0
-        .lock()
-        .unwrap()
-        .snapshot(std::time::Instant::now())
-        .generation;
-    // Refresh monitor topology before creating the round; all windows remain hidden.
-    let (tx, rx) = tokio::sync::oneshot::channel();
-    let handle = app.clone();
-    app.run_on_main_thread(move || {
-        let _ = tx.send(crate::presentation::ensure_windows(&handle).map_err(|e| e.to_string()));
-    })
-    .map_err(|e| e.to_string())?;
-    rx.await.map_err(|e| e.to_string())??;
-    // Wait for every webview to install its listener before starting one shared clock.
+pub async fn preview_reminder(shared: State<'_, AppSharedState>) -> Result<(), String> {
+    let request = shared.0.lock().unwrap().request_preview();
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
     loop {
-        let ready = app.state::<crate::presentation::ReadyWindows>();
-        let all_ready = {
-            let ready = ready.0.lock().unwrap();
-            app.webview_windows()
-                .keys()
-                .filter(|label| label.starts_with("overlay-") || label.starts_with("controls-"))
-                .all(|label| ready.contains(label))
-        };
-        if all_ready {
-            break;
-        }
-        if std::time::Instant::now() >= deadline {
-            return Err("提示窗口尚未就绪，请重试。".into());
+        {
+            let mut scheduler = shared.0.lock().unwrap();
+            let now = std::time::Instant::now();
+            if scheduler.snapshot(now).generation != request {
+                return Ok(());
+            }
+            if now >= deadline {
+                scheduler.cancel_presentation(request);
+                return Err("提示窗口尚未就绪，请重试。".into());
+            }
         }
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
     }
-    shared
-        .0
-        .lock()
-        .unwrap()
-        .preview_if_current(generation, std::time::Instant::now());
-    Ok(())
 }
 
 #[tauri::command]

@@ -1,6 +1,21 @@
 use crate::state::DaemonConfig;
 use std::path::PathBuf;
 
+/// Process-only acceptance override; never stored in the user's config.
+#[derive(Clone, Copy, Default)]
+pub struct RuntimeConfig {
+    pub test_interval_secs: Option<u64>,
+}
+impl RuntimeConfig {
+    pub fn scheduler_config(&self, saved: &DaemonConfig) -> DaemonConfig {
+        let mut config = saved.clone();
+        if let Some(seconds) = self.test_interval_secs {
+            config.interval_secs = seconds;
+        }
+        config
+    }
+}
+
 fn config_path() -> PathBuf {
     dirs::data_local_dir()
         .unwrap_or_else(|| PathBuf::from("."))
@@ -45,17 +60,39 @@ mod tests {
     use super::*;
 
     #[test]
-    fn shortcuts_are_opt_in_and_existing_custom_shortcut_survives() {
-        assert!(DaemonConfig::default().hotkey.is_empty());
+    fn local_test_interval_never_changes_saved_interval() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        let runtime = RuntimeConfig {
+            test_interval_secs: Some(5),
+        };
+        let mut saved = DaemonConfig::default();
+        assert_eq!(runtime.scheduler_config(&saved).interval_secs, 5);
+        saved.reminder_mode = crate::state::ReminderMode::Fog;
+        save_to(&path, &saved).unwrap();
+        let reloaded = load_from(&path).unwrap();
+        assert_eq!(reloaded.interval_secs, 1200);
+        assert_eq!(runtime.scheduler_config(&reloaded).interval_secs, 5);
+        assert_eq!(
+            RuntimeConfig::default()
+                .scheduler_config(&reloaded)
+                .interval_secs,
+            1200
+        );
+    }
+
+    #[test]
+    fn legacy_close_shortcut_is_discarded_and_modifier_still_roundtrips() {
         assert!(DaemonConfig::default().eraser_modifier.is_none());
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("config.json");
         std::fs::write(&path, r#"{"interval_secs":1200,"warning_secs":5,"spreading_secs":20,"holding_secs":20,"dissolving_secs":10,"hotkey":"ctrl+shift+space","auto_start":false}"#).unwrap();
         let mut config = load_from(&path).unwrap();
-        assert_eq!(config.hotkey, "ctrl+shift+space");
+        assert_eq!(config.interval_secs, 1200);
         assert!(config.eraser_modifier.is_none());
         config.eraser_modifier = Some(crate::state::EraserModifier::Alt);
         save_to(&path, &config).unwrap();
+        assert!(!std::fs::read_to_string(&path).unwrap().contains("hotkey"));
         assert_eq!(
             load_from(&path).unwrap().eraser_modifier,
             Some(crate::state::EraserModifier::Alt)
@@ -81,14 +118,12 @@ mod tests {
         let path = dir.path().join("config.json");
         let mut cfg = DaemonConfig::default();
         cfg.fog_notifications = false;
-        cfg.hotkey = "f1+space".to_string();
         cfg.interval_secs = 999;
         cfg.eraser_enabled = true;
         cfg.reminder_mode = crate::state::ReminderMode::Fog;
         save_to(&path, &cfg).unwrap();
         let loaded = load_from(&path).unwrap();
         assert!(!loaded.fog_notifications);
-        assert_eq!(loaded.hotkey, "f1+space");
         assert_eq!(loaded.interval_secs, 999);
         assert!(loaded.eraser_enabled);
         assert_eq!(loaded.reminder_mode, crate::state::ReminderMode::Fog);
@@ -104,12 +139,11 @@ mod tests {
     fn load_from_tolerates_utf8_bom() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("config.json");
-        let mut cfg = DaemonConfig::default();
-        cfg.hotkey = "ctrl+shift+esc".to_string();
+        let cfg = DaemonConfig::default();
         let json = serde_json::to_string_pretty(&cfg).unwrap();
         std::fs::write(&path, format!("\u{feff}{json}")).unwrap();
         let loaded = load_from(&path).expect("BOM-prefixed config should still load");
-        assert_eq!(loaded.hotkey, "ctrl+shift+esc");
+        assert_eq!(loaded.interval_secs, 1200);
     }
 
     #[test]

@@ -8,7 +8,16 @@ static TEMP_KEY: AtomicU64 = AtomicU64::new(0);
 static ROUND: AtomicU64 = AtomicU64::new(0);
 static OWNED: AtomicBool = AtomicBool::new(false);
 static DOWN: AtomicBool = AtomicBool::new(false);
-static EVENTS: OnceLock<mpsc::Sender<(u64, i32, f64, f64)>> = OnceLock::new();
+#[derive(Debug, Clone, Copy)]
+pub enum InputEvent {
+    Move { position: [f64; 2] },
+    Press { position: [f64; 2] },
+    Release { position: [f64; 2] },
+    Wheel { delta: f64 },
+    CapabilityLost,
+    Modifier { key: u32, down: bool },
+}
+static EVENTS: OnceLock<mpsc::Sender<(u64, InputEvent)>> = OnceLock::new();
 // Control bounds are published on the UI thread, read without waiting in hooks.
 static CONTROLS: std::sync::Mutex<Vec<[f64; 4]>> = std::sync::Mutex::new(Vec::new());
 pub fn controls(bounds: Vec<[f64; 4]>) {
@@ -29,7 +38,7 @@ pub extern "C" fn blink_modifier_event(key: u32, down: bool) {
         capture(None);
     }
     if let Some(tx) = EVENTS.get() {
-        let _ = tx.send((current_round(), if down { 5 } else { 6 }, key as f64, 0.0));
+        let _ = tx.send((current_round(), InputEvent::Modifier { key, down }));
     }
 }
 #[no_mangle]
@@ -41,12 +50,20 @@ pub fn capture(round: Option<u64>) {
 }
 #[no_mangle]
 pub extern "C" fn blink_pointer_event(kind: i32, x: f64, y: f64) -> bool {
+    let event = match kind {
+        0 => InputEvent::Move { position: [x, y] },
+        1 => InputEvent::Press { position: [x, y] },
+        2 => InputEvent::Release { position: [x, y] },
+        3 => InputEvent::CapabilityLost,
+        4 => InputEvent::Wheel { delta: x },
+        _ => return false,
+    };
     let round = ROUND.load(Ordering::SeqCst);
-    if kind == 3 {
+    if matches!(event, InputEvent::CapabilityLost) {
         capture(None);
     }
     let mut consume = false;
-    if kind == 1 {
+    if matches!(event, InputEvent::Press { .. }) {
         let was_down = DOWN.swap(true, Ordering::SeqCst);
         // Fail open if control geometry is being refreshed.
         let on_control = CONTROLS
@@ -58,16 +75,18 @@ pub extern "C" fn blink_pointer_event(kind: i32, x: f64, y: f64) -> bool {
             .unwrap_or(true);
         consume = !was_down && round != 0 && !on_control;
         OWNED.store(consume, Ordering::SeqCst);
-    } else if kind == 4 {
+    } else if matches!(event, InputEvent::Wheel { .. }) {
         consume = round != 0;
-    } else if kind == 2 {
+    } else if matches!(event, InputEvent::Release { .. }) {
         DOWN.store(false, Ordering::SeqCst);
         // Match swallowed presses even if the reminder ended during the drag.
         consume = OWNED.swap(false, Ordering::SeqCst);
     }
-    if round != 0 && (kind == 0 || consume || kind == 3) {
+    if round != 0
+        && (matches!(event, InputEvent::Move { .. } | InputEvent::CapabilityLost) || consume)
+    {
         if let Some(tx) = EVENTS.get() {
-            let _ = tx.send((round, kind, x, y));
+            let _ = tx.send((round, event));
         }
     }
     consume
@@ -76,22 +95,11 @@ pub fn install(shared: crate::daemon::SharedState) {
     let (tx, rx) = mpsc::channel();
     let _ = EVENTS.set(tx);
     std::thread::spawn(move || {
-        while let Ok((round, kind, x, y)) = rx.recv() {
-            let now = std::time::Instant::now();
-            let mut scheduler = shared.lock().unwrap();
-            if kind == 5 || kind == 6 {
-                if scheduler.snapshot(now).round_id == Some(round) {
-                    scheduler.system_event(
-                        crate::scheduler::SystemEvent::Modifier {
-                            key: x as u32,
-                            down: kind == 5,
-                        },
-                        now,
-                    );
-                }
-            } else {
-                scheduler.eraser_input(round, kind, x, y, now);
-            }
+        while let Ok((round, event)) = rx.recv() {
+            shared
+                .lock()
+                .unwrap()
+                .eraser_input(round, event, std::time::Instant::now());
         }
     });
 }

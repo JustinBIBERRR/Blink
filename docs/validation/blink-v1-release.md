@@ -89,3 +89,34 @@ and verify silence with sound enabled.
 Related evidence and constraints: [use-time validation](use-time.md),
 [notification validation](ticket-8-notifications.md), and
 [fog/eraser rendering and native acceptance](../fog-rendering.md).
+
+## Review updates and quick local acceptance
+
+The review fixes remove every close-shortcut setting, recorder and dispatcher.
+Existing config files remain readable; their old `hotkey` value is discarded on
+save. Exit uses × (including with the eraser disabled) or a docked-eraser double
+click. Temporary modifier pickup remains available.
+
+Launch the rebuilt macOS app directly for short local cycles:
+
+```sh
+/path/to/Blink.app/Contents/MacOS/blink-rs --settings --test-interval-secs 5
+```
+
+On Windows use `blink-rs.exe --settings --test-interval-secs 5`. This process-only
+interval appears as `5 sec · 本次测试` in settings. The ordinary saved interval
+and production default of 1200 seconds are unchanged by save or preview. The
+interval slider is disabled during this local override. Soft reminders still
+last 3 seconds; fog still lasts 3 + 20 seconds. In this acceptance mode only, the
+next interval begins after natural or manual ending, leaving five clear seconds
+to observe dismissal. Launch without the flag to resume the saved schedule.
+`BLINK_DEV_INTERVAL=5` is retained as an equivalent local override.
+
+Automatic reminders and previews now share one window-readiness barrier before
+the scheduler starts the round clock, resets the ordinary interval or queues a
+notification. Pause, lock, silence and replacement invalidate stale preparations.
+The soft CSS cue catches up once per round instead of advancing twice as fast.
+
+The earlier build identities and test totals above are historical evidence for
+#11, not acceptance of this revised candidate. Native UI and Windows acceptance
+must be repeated on the rebuilt candidate.

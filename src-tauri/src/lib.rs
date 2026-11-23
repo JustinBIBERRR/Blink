@@ -4,8 +4,8 @@ mod config_store;
 mod daemon;
 mod db;
 mod eraser_input;
-mod hotkey;
 mod input_idle;
+mod modifier_input;
 mod notifications;
 mod pause_store;
 mod presentation;
@@ -29,16 +29,19 @@ pub fn run() {
 
     let loaded_config = config_store::load();
     let show_settings = loaded_config.is_none() || std::env::args().any(|arg| arg == "--settings");
-    let mut config = loaded_config.unwrap_or_default();
+    let config = loaded_config.unwrap_or_default();
 
-    // Dev affordance: `BLINK_DEV_INTERVAL=5` triggers a break after 5s so the
-    // overlay can be exercised without waiting 20 minutes.
-    if let Some(secs) = std::env::var("BLINK_DEV_INTERVAL")
-        .ok()
-        .and_then(|s| s.parse::<u64>().ok())
-    {
-        config.interval_secs = secs;
-        log::info!("dev: interval_secs overridden to {secs}");
+    let args: Vec<_> = std::env::args().collect();
+    let test_interval_secs = args
+        .windows(2)
+        .find(|pair| pair[0] == "--test-interval-secs")
+        .map(|pair| pair[1].clone())
+        .or_else(|| std::env::var("BLINK_DEV_INTERVAL").ok())
+        .and_then(|value| value.parse::<u64>().ok())
+        .filter(|seconds| *seconds > 0);
+    let runtime = config_store::RuntimeConfig { test_interval_secs };
+    if let Some(seconds) = test_interval_secs {
+        log::info!("local acceptance interval: {seconds}s (not persisted)");
     }
 
     // SQLite path: %LOCALAPPDATA%/blink-rs/sessions.db
@@ -60,10 +63,14 @@ pub fn run() {
 
     let shared_config = Arc::new(Mutex::new(config));
     let shared_state: SharedState = Arc::new(Mutex::new(Scheduler::new(
-        shared_config.lock().unwrap().clone(),
+        runtime.scheduler_config(&shared_config.lock().unwrap()),
         std::time::Instant::now(),
     )));
 
+    shared_state
+        .lock()
+        .unwrap()
+        .set_acceptance_interval(test_interval_secs);
     shared_state.lock().unwrap().restore_pause(
         pause_store::load(&pause_store::path()),
         pause_store::wall_now(),
@@ -71,12 +78,12 @@ pub fn run() {
     );
 
     let db_for_daemon = db.clone();
-    let db_for_hotkey = db.clone();
     let state_clone = shared_state.clone();
-    let cfg_for_hotkey = shared_config.clone();
+    let cfg_for_modifier = shared_config.clone();
 
     tauri::Builder::default()
         .plugin(tauri_plugin_notification::init())
+        .manage(runtime)
         .manage(presentation::ReadyWindows::default())
         .manage(AppDb(db.clone()))
         .manage(AppConfig(shared_config.clone()))
@@ -122,30 +129,13 @@ pub fn run() {
                 });
             }));
 
-            let (esc_tx, esc_rx) = std::sync::mpsc::channel::<u64>();
-            hotkey::install(esc_tx);
-            hotkey::set_combo(hotkey::parse_combo(&cfg_for_hotkey.lock().unwrap().hotkey));
+            modifier_input::install();
             {
-                let cfg = cfg_for_hotkey.lock().unwrap();
-                if !cfg.hotkey.is_empty() || (cfg.eraser_enabled && cfg.eraser_modifier.is_some()) {
+                let cfg = cfg_for_modifier.lock().unwrap();
+                if cfg.eraser_enabled && cfg.eraser_modifier.is_some() {
                     eraser_input::available();
                 }
             }
-            let state_for_hotkey = state_clone.clone();
-            std::thread::spawn(move || {
-                while let Ok(id) = esc_rx.recv() {
-                    let now = std::time::Instant::now();
-                    let mut state = state_for_hotkey.lock().unwrap();
-                    if state.snapshot(now).round_id == Some(id) {
-                        if state.finish(id, now) {
-                            let _ = db_for_hotkey
-                                .lock()
-                                .unwrap()
-                                .record_session(&state::SessionOutcome::WarnSkipped);
-                        }
-                    }
-                }
-            });
 
             Ok(())
         })
@@ -154,6 +144,7 @@ pub fn run() {
             commands::get_stats_week,
             commands::get_stats_month,
             commands::get_config,
+            commands::get_test_interval,
             commands::save_config,
             commands::close_panel,
             commands::preview_reminder,
