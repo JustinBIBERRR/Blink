@@ -52,9 +52,9 @@ to the project author, per [the specification](../blink-v1-spec.md).
 | Silent start and natural-end notification; disabled/denied/DND | Submission count/timing tests | Permission/banner/audio pending | Identity/banner/audio pending |
 | Multi-monitor alignment, live desktop and mixed DPI | Cannot establish with unit tests | Multi-screen QA pending | Author pending |
 | Shared pickup, strokes, return, radius and deadline | Scheduler and native callback tests | Accessibility and native input pending | Native input pending |
-| Modifier, double-click, optional shortcut | Scheduler/config/callback tests | Both modifier sides and timing pending | Author pending |
+| Modifier pickup, double-click and × close (no close shortcut) | Scheduler/config/callback tests | Both modifier sides and timing pending | Author pending |
 | Mid-drag close, pause, lock, sleep; restored ordinary input | Scheduler cleanup and callback filtering | Native interruption QA pending | Author pending |
-| Installation and first-launch/reopen settings | Native compilation | App/DMG build; launch QA pending | NSIS/MSI final build/install pending |
+| Installation and first-launch/reopen settings | Native compilation | App/DMG and launch/settings passed; install/reopen pending | Final NSIS/MSI build passed; install pending |
 
 ## Packaged-app procedure
 
@@ -62,7 +62,7 @@ Open the app normally: an absent or unreadable configuration shows Settings.
 The tray/menu-bar Settings item always opens it; reopening a hidden macOS app
 opens Settings. For repeatable QA with an existing configuration, launch the
 bundle executable with `--settings` (or `open Blink.app --args --settings` when
-it is not already running). No QA controls are exposed in the product UI.
+it is not already running). An explicit test interval is visibly labelled in Settings.
 
 Use at least two monitors, including a negative desktop origin and different
 scales. Keep moving content and a scrollable document underneath the overlay.
@@ -75,7 +75,7 @@ and verify silence with sound enabled.
 
 ## Known release blockers and limits
 
-- Final Windows artifact build/install and all author-owned Windows manual checks.
+- Windows installation and all author-owned Windows manual checks (final artifact build passed).
 - Actual macOS and Windows multi-monitor visuals, input delivery, interruption,
   notification permission/DND/audio and installation acceptance.
 - macOS unsigned local build is not notarized for public distribution.
@@ -120,3 +120,17 @@ The soft CSS cue catches up once per round instead of advancing twice as fast.
 The earlier build identities and test totals above are historical evidence for
 #11, not acceptance of this revised candidate. Native UI and Windows acceptance
 must be repeated on the rebuilt candidate.
+
+## Final reviewed candidate · 2026-11-23
+
+- Application source: `3bd7e3564c671ffec9c4368a7018c5e6e69b00fc` on `integration/blink-v1`.
+- Final local regression: 51 Rust tests passed plus one isolated native input callback test; frontend typecheck/build, formatting and diff checks passed. Obsolete close-shortcut tests were removed with that feature.
+- Independent final Standards and Spec reviews found no actionable outstanding findings. The earlier two behavior findings and two type-modeling findings were fixed.
+- Rebuilt release app: `/Volumes/代码/projects/Blink-artifacts/2026-11-23/Blink.app`.
+  Executable SHA-256: `057b6715889d74f0b411491f01c1febd8c0734e4e516170931a2fcda1f87c45a`.
+- Final DMG: `/Volumes/代码/projects/Blink-artifacts/2026-11-23/Blink_0.1.0_aarch64.dmg`.
+  SHA-256: `91c37dbdffcf8074f19c26ee41b3196bed82f5e7c41861f6a074e6bcd1659bad`; `hdiutil verify` passed.
+- Double-click launcher: `/Volumes/代码/projects/Blink-artifacts/2026-11-23/启动5秒验收.command`.
+- macOS packaged settings were exercised through native UI automation: first launch opened Settings, the five-second process-only label appeared, the saved interval slider was disabled, close-shortcut controls were absent, fog selection and eraser/notification toggles changed, and Save acknowledged success. Preview was invoked without a displayed error. This does **not** establish full-screen visual, real erasing, multi-monitor, notification-banner or lock/sleep acceptance; the app-specific screenshot surface continued to show Settings.
+- After Save in five-second mode, the actual local JSON still contained `interval_secs: 1200` and no `hotkey` field. Fog, eraser and silent notifications were enabled for subsequent manual acceptance. The temporary test process was stopped after checking; the launcher starts a new five-second session.
+- Final Windows candidate: [Actions run 45131373683](https://github.com/JustinBIBERRR/Blink/actions/runs/45131373683), source `3bd7e35`, completed successfully on 2026-11-23. Formatting, behavior tests, isolated native input tests, frontend build, NSIS/MSI packaging and artifact upload all passed. Installer artifacts are available from that run and under `/Volumes/代码/projects/Blink-artifacts/2026-11-23/windows` after download. Actual installation/native behavior remains author-owned acceptance.
