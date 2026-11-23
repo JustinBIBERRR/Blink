@@ -7,6 +7,17 @@ pub struct ReadyWindows(pub std::sync::Mutex<std::collections::HashSet<String>>)
 
 pub fn ensure_windows(app: &tauri::AppHandle) -> tauri::Result<()> {
     let monitors = app.available_monitors()?;
+    let mut bounds = Vec::new();
+    let eraser_enabled = {
+        let state = app.state::<AppSharedState>();
+        let state = state.0.lock().unwrap();
+        let snapshot = state.snapshot(std::time::Instant::now());
+        if snapshot.round_id.is_some() {
+            snapshot.eraser.enabled
+        } else {
+            state.config.eraser_enabled
+        }
+    };
     for (index, monitor) in monitors.iter().enumerate() {
         let label = format!("overlay-{index}");
         let window = match app.get_webview_window(&label) {
@@ -55,13 +66,33 @@ pub fn ensure_windows(app: &tauri::AppHandle) -> tauri::Result<()> {
             .build()?,
         };
         let size = (48.0 * monitor.scale_factor()) as u32;
+        let width = ((if eraser_enabled { 208.0 } else { 48.0 }) * monitor.scale_factor()) as u32;
         let margin = (20.0 * monitor.scale_factor()) as i32;
-        control.set_size(tauri::PhysicalSize::new(size, size))?;
+        control.set_size(tauri::PhysicalSize::new(width, size))?;
         control.set_position(tauri::PhysicalPosition::new(
-            monitor.position().x + monitor.size().width as i32 - size as i32 - margin,
+            monitor.position().x + monitor.size().width as i32 - width as i32 - margin,
             monitor.position().y + monitor.size().height as i32 - size as i32 - margin,
         ))?;
+        #[cfg(target_os = "macos")]
+        {
+            let mut rect = [0.0; 4];
+            unsafe {
+                crate::eraser_input::blink_window_bounds(control.ns_window()?, rect.as_mut_ptr());
+            }
+            bounds.push(rect);
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            let p = control.outer_position()?;
+            bounds.push([
+                p.x as f64,
+                p.y as f64,
+                p.x as f64 + width as f64,
+                p.y as f64 + size as f64,
+            ]);
+        }
     }
+    crate::eraser_input::controls(bounds);
     for (label, window) in app.webview_windows() {
         if let Some(index) = label
             .strip_prefix("overlay-")
@@ -95,6 +126,7 @@ pub fn reconcile(
         crate::notifications::submit(app, message);
     }
     let key = (snapshot.round_id, snapshot.phase.clone());
+    let _ = app.emit("blink://reminder", &snapshot);
     if previous.as_ref() != Some(&key) {
         #[cfg(target_os = "macos")]
         if previous.as_ref().map(|p| p.0) != Some(snapshot.round_id) {

@@ -12,6 +12,9 @@ const layer = document.createElement('canvas');
 const ctx = layer.getContext('2d')!;
 const desktop = new Image();
 let capturedRound: number | null = null;
+let geometry = [0,0,1];
+const erased = document.createElement('canvas');
+const eraseContext = erased.getContext('2d')!;
 let frame = 0, lastMask = 0, sending = false;
 const smooth = (a: number, b: number, t: number) => { const v = Math.max(0, Math.min(1, (t-a)/(b-a))); return v*v*(3-2*v); };
 function field(x: number, y: number) {
@@ -39,6 +42,7 @@ watch(() => props.snapshot.round_id, async id => {
   desktop.src = ''; capturedRound = null;
   if (id === null || props.snapshot.mode !== 'fog') return;
   try {
+    geometry = await invoke<number[]>('overlay_geometry');
     const url = await invoke<string | null>('fog_capture');
     if (props.snapshot.round_id === id && url) { desktop.src = url; capturedRound = id; }
   } catch (error) { console.error('Desktop blur capture failed', error); }
@@ -54,6 +58,15 @@ function render(now: number) {
   const since = (props.snapshot.elapsed_ms + now - props.receivedAt)/1000 - 3;
   const strength = smooth(0,.65,since)*(1-smooth(17,20,since));
   const front = .012 + .57*smooth(0,5,since);
+  if (erased.width !== w || erased.height !== h) { erased.width=w; erased.height=h; }
+  eraseContext.clearRect(0,0,w,h);
+  eraseContext.lineCap='round'; eraseContext.strokeStyle='white'; eraseContext.fillStyle='white';
+  const [ox,oy,scale]=geometry;
+  for (const [ax,ay,bx,by,r] of props.snapshot.eraser.strokes) {
+    eraseContext.lineWidth=2*r/scale;
+    eraseContext.beginPath(); eraseContext.moveTo((ax-ox)/scale,(ay-oy)/scale); eraseContext.lineTo((bx-ox)/scale,(by-oy)/scale); eraseContext.stroke();
+    eraseContext.beginPath(); eraseContext.arc((bx-ox)/scale,(by-oy)/scale,r/scale,0,Math.PI*2); eraseContext.fill();
+  }
   const alpha: number[] = [];
   for (let i=0; i<mask.width*mask.height; i++) {
     const threshold=field((i%mask.width)/mask.width,Math.floor(i/mask.width)/mask.height);
@@ -62,6 +75,9 @@ function render(now: number) {
     pixels.data[i*4]=pixels.data[i*4+1]=pixels.data[i*4+2]=255; pixels.data[i*4+3]=coverage;
   }
   maskContext.putImageData(pixels,0,0);
+  maskContext.globalCompositeOperation='destination-out';maskContext.drawImage(erased,0,0,mask.width,mask.height);maskContext.globalCompositeOperation='source-over';
+  const masked=maskContext.getImageData(0,0,mask.width,mask.height).data;
+  for(let i=0;i<alpha.length;i++) alpha[i]=masked[i*4+3];
   // The same complete alpha mask is used by native blur and WebView decorations.
   // Eraser integration subtracts persistent strokes here before both consumers.
   if (!sending && now-lastMask>=50) {
@@ -90,8 +106,14 @@ function render(now: number) {
     out.fillStyle=lens;out.beginPath();out.ellipse(x,y,r*.86,r,0,0,Math.PI*2);out.fill();
   }
   out.globalAlpha=1;
+  out.globalCompositeOperation='destination-out';out.drawImage(erased,0,0);out.globalCompositeOperation='source-over';
+  if (props.snapshot.eraser.held && props.snapshot.eraser.cursor) {
+    const [x,y]=props.snapshot.eraser.cursor;
+    out.strokeStyle='rgba(235,248,255,.8)';out.lineWidth=1;
+    out.beginPath();out.arc((x-ox)/scale,(y-oy)/scale,props.snapshot.eraser.radius/scale,0,Math.PI*2);out.stroke();
+  }
 }
-onMounted(()=>{frame=requestAnimationFrame(render);});
+onMounted(async()=>{geometry=await invoke<number[]>('overlay_geometry');frame=requestAnimationFrame(render);});
 onUnmounted(()=>cancelAnimationFrame(frame));
 </script>
 <style scoped>canvas { position:fixed; inset:0; width:100%; height:100%; pointer-events:none; }</style>

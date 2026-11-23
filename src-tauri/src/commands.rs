@@ -248,3 +248,51 @@ pub fn fog_mask(
 extern "C" {
     pub fn blink_fog_mask(window: *mut std::ffi::c_void, alpha: *const u8, width: i32, height: i32);
 }
+
+#[tauri::command]
+pub async fn set_eraser_held(
+    app: tauri::AppHandle,
+    round_id: u64,
+    held: bool,
+    shared: State<'_, AppSharedState>,
+) -> Result<bool, String> {
+    if held {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        app.run_on_main_thread(move || {
+            let _ = tx.send(crate::eraser_input::available());
+        })
+        .map_err(|e| e.to_string())?;
+        if !rx.await.unwrap_or(false) {
+            return Err("请在系统设置中允许 Blink 使用辅助功能后重试。关闭按钮仍然可用。".into());
+        }
+    }
+    Ok(shared
+        .0
+        .lock()
+        .unwrap()
+        .set_eraser_held(round_id, held, std::time::Instant::now()))
+}
+
+#[tauri::command]
+pub async fn overlay_geometry(window: tauri::WebviewWindow) -> Result<[f64; 3], String> {
+    let (tx,rx)=tokio::sync::oneshot::channel();
+    let handle=window.clone();
+    window.run_on_main_thread(move || {
+        let result=(|| {
+            #[cfg(target_os="macos")]
+            {
+                let mut bounds=[0.0;4];
+                unsafe { crate::eraser_input::blink_window_bounds(handle.ns_window().map_err(|e|e.to_string())?,bounds.as_mut_ptr()); }
+                Ok([bounds[0],bounds[1],1.0])
+            }
+            #[cfg(not(target_os="macos"))]
+            {
+                let pos=handle.outer_position().map_err(|e|e.to_string())?;
+                let scale=handle.scale_factor().map_err(|e|e.to_string())?;
+                Ok([pos.x as f64,pos.y as f64,scale])
+            }
+        })();
+        let _=tx.send(result);
+    }).map_err(|e|e.to_string())?;
+    rx.await.map_err(|e|e.to_string())?
+}

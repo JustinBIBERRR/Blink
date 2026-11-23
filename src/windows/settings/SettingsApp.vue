@@ -43,6 +43,7 @@
               <option value="soft">柔和边缘</option><option value="fog">雾气玻璃</option>
             </select>
           </label>
+          <label v-if="config.reminder_mode === 'fog'" class="field-label"><input type="checkbox" v-model="config.eraser_enabled" /> 启用黑板擦，局部擦开雾气</label>
           <p class="field-label">{{ config.reminder_mode === 'soft' ? '外缘冷光轻亮约 3 秒，正文保持清晰。' : '3 秒边缘预告后，雾气凝结并在 20 秒内散去。' }}</p>
           <label v-if="config.reminder_mode === 'fog'" class="field-label">
             <input type="checkbox" v-model="config.fog_notifications" /> 无声系统通知
@@ -132,6 +133,7 @@ import type { DaemonConfig } from '../../types/blink';
 const config = reactive<DaemonConfig>({
   reminder_mode: 'soft',
   fog_notifications: true,
+  eraser_enabled: false,
   interval_secs: 1200,
   warning_secs: 5,
   spreading_secs: 20,

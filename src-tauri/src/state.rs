@@ -34,6 +34,8 @@ pub struct DaemonConfig {
     pub fog_notifications: bool,
     #[serde(default)]
     pub reminder_mode: ReminderMode,
+    #[serde(default)]
+    pub eraser_enabled: bool,
     pub interval_secs: u64,
     pub warning_secs: u64,
     pub spreading_secs: u64,
@@ -52,6 +54,7 @@ impl Default for DaemonConfig {
         Self {
             fog_notifications: true,
             reminder_mode: ReminderMode::Soft,
+            eraser_enabled: false,
             interval_secs: 1200,
             warning_secs: 5,
             spreading_secs: 20,
