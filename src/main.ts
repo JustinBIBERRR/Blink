@@ -10,6 +10,7 @@ const router = createRouter({
       path: '/overlay',
       component: () => import('./windows/overlay/OverlayApp.vue'),
     },
+    { path: '/controls', component: () => import('./windows/overlay/ControlsApp.vue') },
     {
       path: '/stats',
       component: () => import('./windows/stats/StatsApp.vue'),

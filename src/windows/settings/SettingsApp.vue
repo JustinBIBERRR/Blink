@@ -36,9 +36,14 @@
       </section>
 
       <section class="section">
-        <div class="label-caps">柔和休息提示</div>
+        <div class="label-caps">提示方式</div>
         <div class="card">
-          <p class="field-label">屏幕外缘冷光轻亮约 3 秒，随后自动淡出。</p>
+          <label class="field-label">提示方式
+            <select v-model="config.reminder_mode" aria-label="提示方式">
+              <option value="soft">柔和边缘</option><option value="fog">雾气玻璃</option>
+            </select>
+          </label>
+          <p class="field-label">{{ config.reminder_mode === 'soft' ? '外缘冷光轻亮约 3 秒，正文保持清晰。' : '3 秒边缘预告后，雾气凝结并在 20 秒内散去。' }}</p>
           <button class="pill-btn" @click="preview">立即试一次</button>
           <p v-if="previewError" role="alert">{{ previewError }}</p>
         </div>
@@ -123,6 +128,7 @@ import { getConfig, saveConfig, pauseBlink } from '../../composables/useBlink';
 import type { DaemonConfig } from '../../types/blink';
 
 const config = reactive<DaemonConfig>({
+  reminder_mode: 'soft',
   interval_secs: 1200,
   warning_secs: 5,
   spreading_secs: 20,
@@ -137,7 +143,7 @@ const saveFlash = ref(false);
 const previewError = ref('');
 async function preview() {
   previewError.value = '';
-  try { await invoke('preview_reminder'); }
+  try { await saveConfig({ ...config }); await invoke('preview_reminder'); }
   catch (error) { previewError.value = String(error); }
 }
 
