@@ -63,18 +63,19 @@ impl Db {
                 .unwrap()
                 .timestamp()
         };
-        self.aggregate_range(today_start, i64::MAX).map(|(c, e, s, w)| {
-            let total = c + e + s + w;
-            let compliance_pct = if total == 0 { 0 } else { (c * 100) / total };
-            StatsToday {
-                completed: c,
-                early_exit: e,
-                skipped: s,
-                warn_skipped: w,
-                total_sessions: total,
-                compliance_pct,
-            }
-        })
+        self.aggregate_range(today_start, i64::MAX)
+            .map(|(c, e, s, w)| {
+                let total = c + e + s + w;
+                let compliance_pct = if total == 0 { 0 } else { (c * 100) / total };
+                StatsToday {
+                    completed: c,
+                    early_exit: e,
+                    skipped: s,
+                    warn_skipped: w,
+                    total_sessions: total,
+                    compliance_pct,
+                }
+            })
     }
 
     pub fn get_stats_week(&self) -> Result<Vec<DayStats>> {

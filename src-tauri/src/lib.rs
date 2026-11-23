@@ -21,12 +21,15 @@ use daemon::SharedState;
 use db::Db;
 use scheduler::Scheduler;
 use std::sync::{Arc, Mutex};
+use tauri::Manager;
 
 pub fn run() {
     // Default to info-level logging unless overridden via RUST_LOG.
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
 
-    let mut config = config_store::load().unwrap_or_default();
+    let loaded_config = config_store::load();
+    let show_settings = loaded_config.is_none() || std::env::args().any(|arg| arg == "--settings");
+    let mut config = loaded_config.unwrap_or_default();
 
     // Dev affordance: `BLINK_DEV_INTERVAL=5` triggers a break after 5s so the
     // overlay can be exercised without waiting 20 minutes.
@@ -84,6 +87,12 @@ pub fn run() {
             tray::setup_tray(&app.handle())?;
 
             presentation::ensure_windows(app.handle())?;
+            if show_settings {
+                if let Some(window) = app.get_webview_window("settings") {
+                    window.show()?;
+                    window.set_focus()?;
+                }
+            }
             let app_handle = app.handle().clone();
             let previous = Arc::new(Mutex::new(None));
             let event_state = state_clone.clone();
@@ -159,6 +168,21 @@ pub fn run() {
             commands::holder_click,
             commands::overlay_geometry,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app, event| {
+            #[cfg(target_os = "macos")]
+            if let tauri::RunEvent::Reopen {
+                has_visible_windows: false,
+                ..
+            } = event
+            {
+                if let Some(window) = app.get_webview_window("settings") {
+                    let _ = window.show();
+                    let _ = window.set_focus();
+                }
+            }
+            #[cfg(not(target_os = "macos"))]
+            let _ = (app, event);
+        });
 }
