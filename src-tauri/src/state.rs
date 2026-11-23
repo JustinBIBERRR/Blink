@@ -32,6 +32,8 @@ pub enum ReminderMode {
 pub struct DaemonConfig {
     #[serde(default)]
     pub reminder_mode: ReminderMode,
+    #[serde(default)]
+    pub eraser_enabled: bool,
     pub interval_secs: u64,
     pub warning_secs: u64,
     pub spreading_secs: u64,
@@ -45,6 +47,7 @@ impl Default for DaemonConfig {
     fn default() -> Self {
         Self {
             reminder_mode: ReminderMode::Soft,
+            eraser_enabled: false,
             interval_secs: 1200,
             warning_secs: 5,
             spreading_secs: 20,

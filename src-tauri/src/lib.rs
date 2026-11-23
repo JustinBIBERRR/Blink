@@ -3,6 +3,7 @@ mod commands;
 mod config_store;
 mod daemon;
 mod db;
+mod eraser_input;
 mod hotkey;
 mod presentation;
 mod scheduler;
@@ -70,6 +71,7 @@ pub fn run() {
         .manage(AppConfig(shared_config.clone()))
         .manage(AppSharedState(shared_state.clone()))
         .setup(move |app| {
+            eraser_input::install(state_clone.clone());
             // System tray
             tray::setup_tray(&app.handle())?;
 
@@ -145,6 +147,8 @@ pub fn run() {
             commands::finish_reminder,
             commands::fog_mask,
             commands::fog_capture,
+            commands::set_eraser_held,
+            commands::overlay_geometry,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

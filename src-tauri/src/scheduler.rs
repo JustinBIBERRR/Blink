@@ -12,6 +12,7 @@ pub struct ReminderSnapshot {
     pub phase: Phase,
     pub elapsed_ms: u64,
     pub mode: ReminderMode,
+    pub eraser: EraserSnapshot,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -20,7 +21,18 @@ pub enum SystemEvent {
     Sleeping(bool),
 }
 
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct EraserSnapshot {
+    pub enabled: bool,
+    pub held: bool,
+    pub radius: f64,
+    pub cursor: Option<[f64; 2]>,
+    pub strokes: Vec<[f64; 5]>,
+}
+
 pub struct Scheduler {
+    eraser: EraserSnapshot,
+    eraser_last: Option<[f64; 2]>,
     locked: bool,
     sleeping: bool,
     last_clock: Instant,
@@ -35,6 +47,11 @@ pub struct Scheduler {
 impl Scheduler {
     pub fn new(config: DaemonConfig, now: Instant) -> Self {
         Self {
+            eraser: EraserSnapshot {
+                radius: 38.0,
+                ..Default::default()
+            },
+            eraser_last: None,
             locked: false,
             sleeping: false,
             last_clock: now,
@@ -91,6 +108,9 @@ impl Scheduler {
             return self.generation;
         }
 
+        self.reset_eraser();
+        self.eraser.enabled =
+            self.config.eraser_enabled && self.config.reminder_mode == ReminderMode::Fog;
         self.generation += 1;
         self.active = Some((self.generation, now, self.config.reminder_mode));
         self.next_due = now + Duration::from_secs(self.config.interval_secs);
@@ -108,6 +128,7 @@ impl Scheduler {
                     SOFT_DURATION
                 }
         }) {
+            self.reset_eraser();
             self.active = None;
             self.generation += 1;
             outcome = Some(SessionOutcome::Completed);
@@ -148,13 +169,61 @@ impl Scheduler {
         if self.active.map(|(id, _, _)| id) != Some(round_id) {
             return false;
         }
+        self.reset_eraser();
         self.active = None;
         self.generation += 1;
         true
     }
 
+    fn reset_eraser(&mut self) {
+        crate::eraser_input::capture(None);
+        self.eraser = EraserSnapshot {
+            radius: 38.0,
+            ..Default::default()
+        };
+        self.eraser_last = None;
+    }
+
+    pub fn set_eraser_held(&mut self, round_id: u64, held: bool, now: Instant) -> bool {
+        if !self.eraser.enabled
+            || !self.active.is_some_and(|(id, start, _)| {
+                id == round_id && now.saturating_duration_since(start) >= SOFT_DURATION
+            })
+        {
+            return false;
+        }
+        self.eraser.held = held;
+        self.eraser_last = None;
+        crate::eraser_input::capture(if held { Some(round_id) } else { None });
+        true
+    }
+
+    /// Desktop coordinates: macOS points, Windows physical pixels. UI converts per monitor.
+    pub fn eraser_input(&mut self, round_id: u64, kind: i32, x: f64, y: f64, now: Instant) {
+        if self.active.map(|a| a.0) != Some(round_id) || !self.eraser.held {
+            return;
+        }
+        if kind == 3 {
+            self.set_eraser_held(round_id, false, now);
+            return;
+        }
+        self.eraser.cursor = Some([x, y]);
+        if kind == 1 {
+            self.eraser_last = Some([x, y]);
+        }
+        if kind == 2 {
+            self.eraser_last = None;
+            return;
+        }
+        if let Some([px, py]) = self.eraser_last {
+            self.eraser.strokes.push([px, py, x, y, self.eraser.radius]);
+            self.eraser_last = Some([x, y]);
+        }
+    }
+
     pub fn snapshot(&self, now: Instant) -> ReminderSnapshot {
         ReminderSnapshot {
+            eraser: self.eraser.clone(),
             generation: self.generation,
             round_id: self.active.map(|(id, _, _)| id),
             mode: self
@@ -188,6 +257,30 @@ mod tests {
     use super::*;
     use crate::state::DaemonConfig;
     use std::time::{Duration, Instant};
+
+    #[test]
+    fn eraser_is_shared_retains_multiple_strokes_and_releases_on_interrupt() {
+        let now = Instant::now();
+        let mut config = DaemonConfig::default();
+        config.reminder_mode = ReminderMode::Fog;
+        config.eraser_enabled = true;
+        let mut scheduler = Scheduler::new(config, now);
+        let id = scheduler.preview(now);
+        let fog = now + Duration::from_secs(4);
+        assert!(scheduler.set_eraser_held(id, true, fog));
+        scheduler.eraser_input(id, 1, -100.0, 10.0, fog);
+        scheduler.eraser_input(id, 0, 100.0, 20.0, fog);
+        scheduler.eraser_input(id, 2, 100.0, 20.0, fog);
+        scheduler.eraser_input(id, 1, 300.0, 40.0, fog);
+        scheduler.eraser_input(id, 2, 300.0, 40.0, fog);
+        assert_eq!(scheduler.snapshot(fog).eraser.strokes.len(), 3);
+        assert!(scheduler.set_eraser_held(id, false, fog));
+        assert_eq!(scheduler.snapshot(fog).eraser.strokes.len(), 3);
+        assert!(!scheduler.snapshot(fog).eraser.held);
+        scheduler.system_event(SystemEvent::Sleeping(true), fog);
+        assert!(scheduler.snapshot(fog).eraser.strokes.is_empty());
+        assert!(!scheduler.set_eraser_held(id, true, fog));
+    }
 
     #[test]
     fn closing_fog_ends_current_round_and_rejects_delayed_close() {
