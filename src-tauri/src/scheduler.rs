@@ -32,6 +32,7 @@ pub struct EraserSnapshot {
 }
 
 pub struct Scheduler {
+    notifications: Vec<&'static str>,
     eraser: EraserSnapshot,
     eraser_last: Option<[f64; 2]>,
     idle_deferred: bool,
@@ -51,6 +52,7 @@ pub struct Scheduler {
 impl Scheduler {
     pub fn new(config: DaemonConfig, now: Instant) -> Self {
         Self {
+            notifications: Vec::new(),
             eraser: EraserSnapshot {
                 radius: 38.0,
                 ..Default::default()
@@ -69,6 +71,11 @@ impl Scheduler {
             pause_deadline: None,
             is_silenced: false,
         }
+    }
+
+    /// Drain native submissions once, independently of per-monitor rendering.
+    pub fn take_notifications(&mut self) -> Vec<&'static str> {
+        std::mem::take(&mut self.notifications)
     }
 
     /// Idle input controls display eligibility, never accumulated use time.
@@ -137,7 +144,12 @@ impl Scheduler {
         self.eraser.enabled =
             self.config.eraser_enabled && self.config.reminder_mode == ReminderMode::Fog;
         self.generation += 1;
+        self.notifications
+            .retain(|message| *message != "即将开始休息提示");
         self.active = Some((self.generation, now, self.config.reminder_mode));
+        if self.config.fog_notifications && self.config.reminder_mode == ReminderMode::Fog {
+            self.notifications.push("即将开始休息提示");
+        }
         self.next_due = now + Duration::from_secs(self.config.interval_secs);
         self.generation
     }
@@ -153,6 +165,13 @@ impl Scheduler {
                     SOFT_DURATION
                 }
         }) {
+            if self.config.fog_notifications
+                && self
+                    .active
+                    .is_some_and(|(_, _, mode)| mode == ReminderMode::Fog)
+            {
+                self.notifications.push("雾已散去");
+            }
             self.reset_eraser();
             self.active = None;
             self.generation += 1;
@@ -226,6 +245,8 @@ impl Scheduler {
         if self.active.map(|(id, _, _)| id) != Some(round_id) {
             return false;
         }
+        self.notifications
+            .retain(|message| *message != "即将开始休息提示");
         self.reset_eraser();
         self.active = None;
         self.generation += 1;
@@ -314,6 +335,49 @@ mod tests {
     use super::*;
     use crate::state::DaemonConfig;
     use std::time::{Duration, Instant};
+
+    #[test]
+    fn fog_submits_once_at_prelude_and_after_natural_fade() {
+        let now = Instant::now();
+        let mut config = DaemonConfig::default();
+        config.reminder_mode = ReminderMode::Fog;
+        let mut scheduler = Scheduler::new(config, now);
+        scheduler.preview(now);
+        assert_eq!(scheduler.take_notifications(), vec!["即将开始休息提示"]);
+        assert!(scheduler.take_notifications().is_empty());
+        scheduler.tick(now + Duration::from_secs(22));
+        assert!(scheduler.take_notifications().is_empty());
+        scheduler.tick(now + Duration::from_secs(23));
+        assert_eq!(scheduler.take_notifications(), vec!["雾已散去"]);
+        scheduler.tick(now + Duration::from_secs(24));
+        assert!(scheduler.take_notifications().is_empty());
+    }
+
+    #[test]
+    fn notifications_can_be_disabled_without_stopping_visuals() {
+        let now = Instant::now();
+        let mut config = DaemonConfig::default();
+        config.reminder_mode = ReminderMode::Fog;
+        config.fog_notifications = false;
+        let mut scheduler = Scheduler::new(config, now);
+        scheduler.preview(now);
+        assert_eq!(scheduler.snapshot(now).phase, Phase::Warning);
+        assert!(scheduler.take_notifications().is_empty());
+        scheduler.tick(now + Duration::from_secs(23));
+        assert_eq!(scheduler.snapshot(now).phase, Phase::Monitoring);
+        assert!(scheduler.take_notifications().is_empty());
+    }
+
+    #[test]
+    fn interrupted_round_cancels_unsubmitted_prelude() {
+        let now = Instant::now();
+        let mut config = DaemonConfig::default();
+        config.reminder_mode = ReminderMode::Fog;
+        let mut scheduler = Scheduler::new(config, now);
+        let id = scheduler.preview(now);
+        scheduler.finish(id, now);
+        assert!(scheduler.take_notifications().is_empty());
+    }
 
     #[test]
     fn every_round_exit_discards_held_eraser_and_rejects_queued_strokes() {
@@ -418,6 +482,34 @@ mod tests {
         assert!(!scheduler.preview_if_current(generation, now));
         assert!(!scheduler.finish(id, now));
         assert_eq!(scheduler.tick(now + Duration::from_secs(3)), None);
+    }
+
+    #[test]
+    fn soft_and_interrupted_fog_do_not_submit_natural_end() {
+        let now = Instant::now();
+        let mut soft = Scheduler::new(DaemonConfig::default(), now);
+        soft.preview(now);
+        soft.tick(now + Duration::from_secs(3));
+        assert!(soft.take_notifications().is_empty());
+        for interrupt in 0..5 {
+            let mut config = DaemonConfig::default();
+            config.reminder_mode = ReminderMode::Fog;
+            let mut scheduler = Scheduler::new(config, now);
+            let id = scheduler.preview(now);
+            assert_eq!(scheduler.take_notifications(), vec!["即将开始休息提示"]);
+            match interrupt {
+                0 => {
+                    scheduler.finish(id, now);
+                }
+                1 => scheduler.system_event(SystemEvent::Locked(true), now),
+                2 => scheduler.system_event(SystemEvent::Sleeping(true), now),
+                3 => scheduler.system_event(SystemEvent::Silenced(true), now),
+                _ => scheduler.pause(60, now),
+            }
+            scheduler.tick(now + Duration::from_secs(23));
+            assert!(scheduler.take_notifications().is_empty());
+            assert_eq!(scheduler.snapshot(now).round_id, None);
+        }
     }
 
     #[test]

@@ -30,6 +30,8 @@ pub enum ReminderMode {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DaemonConfig {
+    #[serde(default = "enabled")]
+    pub fog_notifications: bool,
     #[serde(default)]
     pub reminder_mode: ReminderMode,
     #[serde(default)]
@@ -43,9 +45,14 @@ pub struct DaemonConfig {
     pub auto_start: bool,
 }
 
+fn enabled() -> bool {
+    true
+}
+
 impl Default for DaemonConfig {
     fn default() -> Self {
         Self {
+            fog_notifications: true,
             reminder_mode: ReminderMode::Soft,
             eraser_enabled: false,
             interval_secs: 1200,

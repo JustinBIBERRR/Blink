@@ -115,7 +115,16 @@ pub fn reconcile(
     previous: &mut Option<(Option<u64>, crate::state::Phase)>,
 ) {
     let state = app.state::<AppSharedState>();
-    let snapshot: ReminderSnapshot = state.0.lock().unwrap().snapshot(std::time::Instant::now());
+    let (snapshot, notifications): (ReminderSnapshot, _) = {
+        let mut scheduler = state.0.lock().unwrap();
+        (
+            scheduler.snapshot(std::time::Instant::now()),
+            scheduler.take_notifications(),
+        )
+    };
+    for message in notifications {
+        crate::notifications::submit(app, message);
+    }
     let key = (snapshot.round_id, snapshot.phase.clone());
     let _ = app.emit("blink://reminder", &snapshot);
     if previous.as_ref() != Some(&key) {
