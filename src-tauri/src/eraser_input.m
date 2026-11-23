@@ -62,3 +62,10 @@ void blink_window_bounds(void *raw, double *bounds) {
     bounds[0] = r.origin.x; bounds[1] = top - NSMaxY(r);
     bounds[2] = NSMaxX(r); bounds[3] = top - r.origin.y;
 }
+
+bool blink_accessibility_trusted(void) {
+    return AXIsProcessTrusted();
+}
+bool blink_open_accessibility_settings(void) {
+    return [NSWorkspace.sharedWorkspace openURL:[NSURL URLWithString:@"x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"]];
+}

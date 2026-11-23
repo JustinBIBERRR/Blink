@@ -56,19 +56,24 @@ pub fn save_config(
     shared: State<AppSharedState>,
 ) -> Result<(), String> {
     let auto_start = new_config.auto_start;
+    let previous = config.0.lock().unwrap().clone();
+    let enable_modifier = new_config.eraser_enabled
+        && new_config.eraser_modifier.is_some()
+        && (!previous.eraser_enabled || previous.eraser_modifier != new_config.eraser_modifier);
+    crate::config_store::save(&new_config)?;
+    crate::startup::set_auto_start(auto_start).map_err(|e| e.to_string())?;
     *config.0.lock().unwrap() = new_config.clone();
     shared.0.lock().unwrap().update_config(
         runtime.scheduler_config(&new_config),
         std::time::Instant::now(),
     );
-    if new_config.eraser_enabled && new_config.eraser_modifier.is_some() {
+    if enable_modifier {
         app.run_on_main_thread(|| {
             crate::eraser_input::available();
         })
         .map_err(|e| e.to_string())?;
     }
-    crate::config_store::save(&new_config)?;
-    crate::startup::set_auto_start(auto_start).map_err(|e| e.to_string())
+    Ok(())
 }
 
 #[tauri::command]
@@ -325,4 +330,63 @@ pub async fn overlay_geometry(window: tauri::WebviewWindow) -> Result<[f64; 3], 
         })
         .map_err(|e| e.to_string())?;
     rx.await.map_err(|e| e.to_string())?
+}
+
+#[derive(serde::Serialize)]
+pub struct SettingsEnvironment {
+    platform: &'static str,
+    accessibility_trusted: bool,
+    reduce_transparency: bool,
+    auto_start_supported: bool,
+}
+
+#[tauri::command]
+pub async fn get_settings_environment(app: tauri::AppHandle) -> Result<SettingsEnvironment, String> {
+    #[cfg(target_os = "macos")]
+    {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        app.run_on_main_thread(move || {
+            let _ = tx.send(SettingsEnvironment {
+                platform: "macos",
+                accessibility_trusted: unsafe { blink_accessibility_trusted() },
+                reduce_transparency: unsafe { blink_reduce_transparency() },
+                auto_start_supported: false,
+            });
+        }).map_err(|e| e.to_string())?;
+        rx.await.map_err(|e| e.to_string())
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = app;
+        Ok(SettingsEnvironment {
+            platform: std::env::consts::OS,
+            accessibility_trusted: true,
+            reduce_transparency: false,
+            auto_start_supported: cfg!(target_os = "windows"),
+        })
+    }
+}
+
+#[tauri::command]
+pub async fn open_accessibility_settings(app: tauri::AppHandle) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        app.run_on_main_thread(move || {
+            let _ = tx.send(unsafe { blink_open_accessibility_settings() });
+        }).map_err(|e| e.to_string())?;
+        if !rx.await.map_err(|e| e.to_string())? {
+            return Err("无法打开系统设置，请手动前往隐私与安全性中的辅助功能。".into());
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = app;
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+extern "C" {
+    fn blink_accessibility_trusted() -> bool;
+    fn blink_reduce_transparency() -> bool;
+    fn blink_open_accessibility_settings() -> bool;
 }

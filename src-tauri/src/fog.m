@@ -1,12 +1,18 @@
 #import <AppKit/AppKit.h>
 // Main-thread only. Native behind-window compositing samples the live desktop,
-// unlike a WebView's CSS backdrop-filter. Alpha zero is a real clear hole.
+// unlike a WebView's CSS backdrop-filter.
 void blink_fog_mask(void *raw, const unsigned char *alpha, int width, int height) {
     NSWindow *window = (__bridge NSWindow *)raw;
     NSView *content = window.contentView;
     NSVisualEffectView *fog = nil;
     for (NSView *view in content.subviews) {
         if ([view.identifier isEqualToString:@"blink-fog"]) { fog = (NSVisualEffectView *)view; break; }
+    }
+    // Reduced transparency can turn the material into an opaque backdrop.
+    // Keep the WebView frost and eraser, without native background blur.
+    if (NSWorkspace.sharedWorkspace.accessibilityDisplayShouldReduceTransparency) {
+        fog.hidden = YES;
+        return;
     }
     if (!fog && !alpha) return;
     if (!fog) {
@@ -31,4 +37,8 @@ void blink_fog_mask(void *raw, const unsigned char *alpha, int width, int height
     [mask addRepresentation:bitmap];
     fog.maskImage = mask;
     fog.hidden = NO;
+}
+
+bool blink_reduce_transparency(void) {
+    return NSWorkspace.sharedWorkspace.accessibilityDisplayShouldReduceTransparency;
 }

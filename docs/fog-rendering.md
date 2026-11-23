@@ -9,7 +9,9 @@ macOS uses `NSVisualEffectView` with behind-window blending, active state and a
 160×90 alpha `maskImage`. The alpha is sent at at most 20 Hz, and checked against
 the current round again on the AppKit thread. The WebView draws only frost,
 droplets and tint. This uses the compositor's live desktop, without screen capture.
-The operating system's material/accessibility settings may affect appearance.
+When macOS Reduce Transparency is enabled, Blink omits the native blur material
+to avoid an opaque backdrop. The transparent WebView frost and eraser remain.
+Settings describes this fallback; system preferences are never changed.
 
 Windows captures the bounds of each overlay's monitor through GDI, including
 negative monitor origins, downsampled by two. It blurs the captured image only
