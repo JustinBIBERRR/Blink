@@ -14,7 +14,16 @@ pub struct ReminderSnapshot {
     pub mode: ReminderMode,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub enum SystemEvent {
+    Locked(bool),
+    Sleeping(bool),
+}
+
 pub struct Scheduler {
+    locked: bool,
+    sleeping: bool,
+    last_clock: Instant,
     pub config: DaemonConfig,
     generation: u64,
     next_due: Instant,
@@ -26,6 +35,9 @@ pub struct Scheduler {
 impl Scheduler {
     pub fn new(config: DaemonConfig, now: Instant) -> Self {
         Self {
+            locked: false,
+            sleeping: false,
+            last_clock: now,
             next_due: now + Duration::from_secs(config.interval_secs),
             config,
             generation: 0,
@@ -35,7 +47,50 @@ impl Scheduler {
         }
     }
 
+    pub fn update_config(&mut self, config: DaemonConfig, now: Instant) {
+        self.advance_clock(now);
+        if self.config.interval_secs != config.interval_secs {
+            self.next_due = now + Duration::from_secs(config.interval_secs);
+        }
+        self.config = config;
+    }
+
+    fn advance_clock(&mut self, now: Instant) {
+        if self.locked || self.sleeping {
+            self.next_due += now.saturating_duration_since(self.last_clock);
+        }
+        self.last_clock = now;
+    }
+
+    pub fn system_event(&mut self, event: SystemEvent, now: Instant) {
+        self.advance_clock(now);
+        match event {
+            SystemEvent::Locked(value) => self.locked = value,
+            SystemEvent::Sleeping(value) => self.sleeping = value,
+        }
+        if self.locked || self.sleeping {
+            if let Some((id, _, _)) = self.active {
+                self.finish(id, now);
+            } else {
+                self.generation += 1;
+            }
+        }
+    }
+
+    pub fn preview_if_current(&mut self, generation: u64, now: Instant) -> bool {
+        if self.generation != generation || self.locked || self.sleeping {
+            return false;
+        }
+        self.preview(now);
+        true
+    }
+
     pub fn preview(&mut self, now: Instant) -> u64 {
+        self.advance_clock(now);
+        if self.locked || self.sleeping {
+            return self.generation;
+        }
+
         self.generation += 1;
         self.active = Some((self.generation, now, self.config.reminder_mode));
         self.next_due = now + Duration::from_secs(self.config.interval_secs);
@@ -43,6 +98,7 @@ impl Scheduler {
     }
 
     pub fn tick(&mut self, now: Instant) -> Option<SessionOutcome> {
+        self.advance_clock(now);
         let mut outcome = None;
         if self.active.is_some_and(|(_, start, mode)| {
             now.saturating_duration_since(start)
@@ -64,7 +120,12 @@ impl Scheduler {
             self.paused_until = None;
             self.next_due = now + Duration::from_secs(self.config.interval_secs);
         }
-        if self.active.is_none() && now >= self.next_due && !self.is_silenced {
+        if self.active.is_none()
+            && now >= self.next_due
+            && !self.is_silenced
+            && !self.locked
+            && !self.sleeping
+        {
             self.preview(now);
         }
 
@@ -176,6 +237,59 @@ mod tests {
             Some(SessionOutcome::Completed)
         );
         assert!(!scheduler.finish(id, now + Duration::from_secs(24)));
+        assert_eq!(scheduler.snapshot(now).round_id, None);
+    }
+
+    #[test]
+    fn interrupt_invalidates_pending_preview_even_after_unlock() {
+        let now = Instant::now();
+        let mut scheduler = Scheduler::new(DaemonConfig::default(), now);
+        let requested_generation = scheduler.snapshot(now).generation;
+        scheduler.system_event(SystemEvent::Locked(true), now);
+        scheduler.system_event(SystemEvent::Locked(false), now);
+        assert!(!scheduler.preview_if_current(requested_generation, now));
+        assert_eq!(scheduler.snapshot(now).round_id, None);
+    }
+
+    #[test]
+    fn changed_interval_counts_reading_and_restart_begins_fresh() {
+        let now = Instant::now();
+        let mut scheduler = Scheduler::new(DaemonConfig::default(), now);
+        let mut config = DaemonConfig::default();
+        config.interval_secs = 10;
+        scheduler.update_config(config.clone(), now);
+        scheduler.tick(now + Duration::from_secs(9));
+        assert_eq!(scheduler.snapshot(now).round_id, None);
+        scheduler.tick(now + Duration::from_secs(10));
+        assert!(scheduler.snapshot(now).round_id.is_some());
+        let mut restarted = Scheduler::new(config, now + Duration::from_secs(11));
+        restarted.tick(now + Duration::from_secs(20));
+        assert_eq!(restarted.snapshot(now).round_id, None);
+        restarted.tick(now + Duration::from_secs(21));
+        assert!(restarted.snapshot(now).round_id.is_some());
+    }
+
+    #[test]
+    fn lock_and_sleep_suspend_independently_and_reject_late_rounds() {
+        let now = Instant::now();
+        let mut config = DaemonConfig::default();
+        config.interval_secs = 10;
+        let mut scheduler = Scheduler::new(config, now);
+        scheduler.tick(now + Duration::from_secs(4));
+        scheduler.system_event(SystemEvent::Locked(true), now + Duration::from_secs(4));
+        scheduler.system_event(SystemEvent::Sleeping(true), now + Duration::from_secs(5));
+        scheduler.system_event(SystemEvent::Sleeping(false), now + Duration::from_secs(100));
+        scheduler.tick(now + Duration::from_secs(200));
+        assert_eq!(scheduler.snapshot(now).round_id, None);
+        scheduler.system_event(SystemEvent::Locked(false), now + Duration::from_secs(200));
+        scheduler.tick(now + Duration::from_secs(205));
+        assert_eq!(scheduler.snapshot(now).round_id, None);
+        scheduler.tick(now + Duration::from_secs(206));
+        let id = scheduler.snapshot(now).round_id.unwrap();
+        scheduler.system_event(SystemEvent::Sleeping(true), now + Duration::from_secs(207));
+        assert_eq!(scheduler.snapshot(now).round_id, None);
+        assert!(!scheduler.finish(id, now + Duration::from_secs(208)));
+        scheduler.preview(now + Duration::from_secs(208));
         assert_eq!(scheduler.snapshot(now).round_id, None);
     }
 

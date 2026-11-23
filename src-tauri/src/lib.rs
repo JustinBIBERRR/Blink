@@ -9,6 +9,7 @@ mod scheduler;
 mod silence;
 mod startup;
 mod state;
+mod system_events;
 mod tray;
 
 use commands::{AppConfig, AppDb, AppSharedState};
@@ -75,6 +76,20 @@ pub fn run() {
             presentation::ensure_windows(app.handle())?;
             let app_handle = app.handle().clone();
             let previous = Arc::new(Mutex::new(None));
+            let event_state = state_clone.clone();
+            let event_app = app.handle().clone();
+            let event_previous = previous.clone();
+            system_events::install(move |event| {
+                event_state
+                    .lock()
+                    .unwrap()
+                    .system_event(event, std::time::Instant::now());
+                let handle = event_app.clone();
+                let previous = event_previous.clone();
+                let _ = event_app.run_on_main_thread(move || {
+                    presentation::reconcile(&handle, &mut previous.lock().unwrap());
+                });
+            });
             tauri::async_runtime::spawn(daemon::run(state_clone.clone(), move |outcome| {
                 if let Some(outcome) = outcome {
                     let _ = db_for_daemon.lock().unwrap().record_session(&outcome);
