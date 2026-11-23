@@ -32,6 +32,5 @@ export interface DaemonConfig {
   spreading_secs: number;
   holding_secs: number;
   dissolving_secs: number;
-  hotkey: string;
   auto_start: boolean;
 }

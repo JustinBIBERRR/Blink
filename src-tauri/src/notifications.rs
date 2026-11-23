@@ -1,5 +1,9 @@
 //! Best-effort native delivery. OS authorization/DND never governs the reminder.
-pub fn submit(app: &tauri::AppHandle, body: &'static str) {
+pub fn submit(app: &tauri::AppHandle, intent: crate::scheduler::NotificationIntent) {
+    let body = match intent {
+        crate::scheduler::NotificationIntent::FogStarting => "即将开始休息提示",
+        crate::scheduler::NotificationIntent::FogCleared => "雾已散去",
+    };
     #[cfg(target_os = "macos")]
     {
         let _ = app;

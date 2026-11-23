@@ -2,7 +2,7 @@
   <EraserArt v-if="snapshot.eraser.held && snapshot.eraser.cursor" class="held-eraser" :empty="false" :lifted="true" :style="{left: `${(snapshot.eraser.cursor[0]-geometry[0])/geometry[2]}px`,top: `${(snapshot.eraser.cursor[1]-geometry[1])/geometry[2]}px`}" />
   <FogLayer :snapshot="snapshot" :received-at="receivedAt" />
   <div v-if="snapshot.round_id !== null" :key="snapshot.round_id" class="soft-reminder"
-    :style="{ animationDelay: `-${snapshot.elapsed_ms}ms` }" aria-hidden="true" />
+    :style="{ animationDelay: `-${softCatchupMs}ms` }" aria-hidden="true" />
 </template>
 
 <script setup lang="ts">
@@ -14,6 +14,11 @@ import { invoke } from '@tauri-apps/api/core';
 const geometry=ref([0,0,1]);
 onMounted(async()=>{geometry.value=await invoke<number[]>('overlay_geometry');});
 const { snapshot, receivedAt } = useReminder();
+const softCatchupMs = ref(0);
+// The CSS clock advances locally; catch up only when this round first arrives.
+watch(() => snapshot.value.round_id, () => {
+  softCatchupMs.value = snapshot.value.elapsed_ms;
+}, { immediate: true, flush: 'sync' });
 watch(()=>snapshot.value.round_id, async id=>{if(id!==null) geometry.value=await invoke<number[]>('overlay_geometry');});
 </script>
 

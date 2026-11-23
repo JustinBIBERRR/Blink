@@ -44,54 +44,6 @@ export function useCapture() {
   return { capture };
 }
 
-const HOTKEY_LABELS: Record<string, string> = {
-  ctrl: 'Ctrl', shift: 'Shift', alt: 'Alt', win: 'Win', space: 'Space',
-  esc: 'Esc', enter: 'Enter', tab: 'Tab', left: '←', right: '→', up: '↑', down: '↓',
-};
-
-/** Format a `+`-joined token hotkey (e.g. "ctrl+shift+esc") for display ("Ctrl+Shift+Esc"). */
-export function formatHotkey(hotkey: string): string {
-  return (hotkey || '')
-    .split('+')
-    .map((s) => s.trim())
-    .filter(Boolean)
-    .map((t) => HOTKEY_LABELS[t] ?? t.toUpperCase())
-    .join('+');
-}
-
-/**
- * Reactive, display-formatted escape hotkey. Fetched on mount and refreshed at
- * the start of each break (phase → warning) so the overlay hint always reflects
- * the user's current setting, even after they change it mid-session. Empty when
- * no escape hotkey is configured.
- */
-export function useHotkey() {
-  const hotkey = ref<string>('');
-  let unlisten: (() => void) | null = null;
-
-  const refresh = async () => {
-    try {
-      const cfg = await getConfig();
-      hotkey.value = formatHotkey(cfg.hotkey);
-    } catch {
-      /* leave previous value on transient error */
-    }
-  };
-
-  onMounted(async () => {
-    await refresh();
-    unlisten = await listen<Phase>('blink://phase', (event) => {
-      if (event.payload === 'warning') refresh();
-    });
-  });
-
-  onUnmounted(() => {
-    unlisten?.();
-  });
-
-  return { hotkey };
-}
-
 export async function getStatsToday(): Promise<StatsToday> {
   return invoke<StatsToday>('get_stats_today');
 }

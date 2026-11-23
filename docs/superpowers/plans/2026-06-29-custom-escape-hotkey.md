@@ -1,3 +1,5 @@
+> **已取代（2026-11-23）**：用户已明确撤销关闭快捷键功能。以下仅保留历史记录，不再作为实施要求。当前退出方式为双击归位黑板擦或点击独立 ×；修饰键仅用于临时持擦。现行规范见 [Blink v1](../../blink-v1-spec.md)。
+
 # 自定义取消热键 Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.

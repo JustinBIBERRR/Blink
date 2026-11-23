@@ -115,6 +115,33 @@ pub fn reconcile(
     previous: &mut Option<(Option<u64>, crate::state::Phase)>,
 ) {
     let state = app.state::<AppSharedState>();
+    let request = state
+        .0
+        .lock()
+        .unwrap()
+        .pending_presentation(std::time::Instant::now());
+    if let Some(request) = request {
+        match ensure_windows(app) {
+            Ok(()) => {
+                let windows = app.webview_windows();
+                let ready = app.state::<ReadyWindows>();
+                let ready = ready.0.lock().unwrap();
+                let mut participating = windows.keys().filter(|label| {
+                    label.starts_with("overlay-") || label.starts_with("controls-")
+                });
+                let all_ready = participating.clone().next().is_some()
+                    && participating.all(|label| ready.contains(label));
+                if all_ready {
+                    state
+                        .0
+                        .lock()
+                        .unwrap()
+                        .present_if_current(request, std::time::Instant::now());
+                }
+            }
+            Err(error) => log::warn!("monitor preparation failed: {error}"),
+        }
+    }
     let (snapshot, notifications): (ReminderSnapshot, _) = {
         let mut scheduler = state.0.lock().unwrap();
         (

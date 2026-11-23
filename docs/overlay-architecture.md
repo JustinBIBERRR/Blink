@@ -81,7 +81,7 @@ Two animatable custom properties (registered with `@property`, `<number>`,
   `phase-<phase>` class from it.
 - Capture: emitted as `blink://capture` (base64 BMP data URL) at the
   Monitoring→Warning transition, before `overlay.show()`.
-- Escape: global `Ctrl+Shift+Space` returns to Monitoring.
+- Exit: the visible × or a docked-eraser double click ends the shared reminder. No close keyboard shortcut is registered.
 - `BLINK_DEV_INTERVAL=<secs>` env var shortens the interval for testing.
 
 ## Verification

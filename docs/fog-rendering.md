@@ -67,23 +67,21 @@ An already manually held eraser stays held when an unrelated modifier is release
 Both platforms install actual native keyboard and mouse hooks. macOS requests
 Accessibility on explicit pickup or opting into a keyboard operation. With access
 denied, the visible close control remains independent; grant access and retry
-pickup or save the shortcut configuration to start the native hook.
+pickup or save the temporary-modifier configuration to start the native hook.
 
 The holder remembers that a double click began docked, so its first-click pickup
 does not prevent whole-round exit. The frontend serializes the two commands around
-native permission checks. Close hotkeys are empty by default, and an empty setting
-never triggers. Existing persisted shortcuts are preserved, including the former
-prototype default: older files cannot distinguish an intentional choice from that
-default. Users can clear all shortcut boxes to disable it. New temporary-modifier
-settings default to off and round-trip with config.
+native permission checks. Closing uses the visible × or a docked-eraser double click.
+All close-shortcut configuration, recording and dispatch has been removed. Legacy
+JSON hotkey fields are ignored on load and omitted on save. Temporary modifiers
+remain optional and default to off; macOS observes flags changes, and the Windows
+keyboard bridge forwards only modifier changes to the shared eraser lifecycle.
 
 Automated coverage exercises scheduler radius/marks/deadline, modifier return,
 docked double-click exit and stale actions, configuration defaults/migration, and
 native callback filtering (original desktop drag, holder exemption, wheel ownership,
-and matched release after ending mid-drag). The singleton native callback tests (including macOS optional, edge-triggered,
-round-scoped keyboard exit) must
+and matched release after ending mid-drag). The singleton native pointer callback test must
 run separately: `cargo test native_ --lib -- --ignored --test-threads=1`.
 Compilation and callback tests do not prove OS delivery: packaged macOS and Windows
 acceptance must still verify Accessibility denial/regrant, both left/right modifier
-keys, wheel/trackpad behavior over underlying scrollable apps, keyboard close,
-double-click timing, and interruption during a drag on mixed-DPI monitors.
+keys, wheel/trackpad behavior over underlying scrollable apps, double-click timing, and interruption during a drag on mixed-DPI monitors.

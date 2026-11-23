@@ -63,7 +63,6 @@ pub struct DaemonConfig {
     pub holding_secs: u64,
     pub dissolving_secs: u64,
     #[serde(default)]
-    pub hotkey: String,
     pub auto_start: bool,
 }
 
@@ -83,7 +82,6 @@ impl Default for DaemonConfig {
             spreading_secs: 20,
             holding_secs: 20,
             dissolving_secs: 10,
-            hotkey: String::new(),
             auto_start: true,
         }
     }
