@@ -50,7 +50,11 @@ pub fn save_config(
 ) -> Result<(), String> {
     let auto_start = new_config.auto_start;
     *config.0.lock().unwrap() = new_config.clone();
-    shared.0.lock().unwrap().config = new_config.clone();
+    shared
+        .0
+        .lock()
+        .unwrap()
+        .update_config(new_config.clone(), std::time::Instant::now());
     // Push the new combo to the live keyboard hook and persist to disk.
     crate::hotkey::set_combo(crate::hotkey::parse_combo(&new_config.hotkey));
     crate::config_store::save(&new_config)?;
@@ -67,6 +71,12 @@ pub async fn preview_reminder(
     app: tauri::AppHandle,
     shared: State<'_, AppSharedState>,
 ) -> Result<(), String> {
+    let generation = shared
+        .0
+        .lock()
+        .unwrap()
+        .snapshot(std::time::Instant::now())
+        .generation;
     // Refresh monitor topology before creating the round; all windows remain hidden.
     let (tx, rx) = tokio::sync::oneshot::channel();
     let handle = app.clone();
@@ -94,7 +104,11 @@ pub async fn preview_reminder(
         }
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
     }
-    shared.0.lock().unwrap().preview(std::time::Instant::now());
+    shared
+        .0
+        .lock()
+        .unwrap()
+        .preview_if_current(generation, std::time::Instant::now());
     Ok(())
 }
 
