@@ -89,7 +89,7 @@ mod hook {
 
     static ACTIVE_COMBO: Mutex<Vec<u32>> = Mutex::new(Vec::new());
     static ARMED: AtomicBool = AtomicBool::new(true);
-    static ESCAPE_TX: OnceLock<Sender<()>> = OnceLock::new();
+    static ESCAPE_TX: OnceLock<Sender<u64>> = OnceLock::new();
 
     /// True if `vk` is physically held right now, per the OS async key-state
     /// table. Used instead of a hook-maintained pressed-set so a KEYUP we never
@@ -109,7 +109,7 @@ mod hook {
 
     /// Install the global low-level keyboard hook on a dedicated message-pump
     /// thread. `tx` receives one `()` each time the active combo is pressed.
-    pub fn install(tx: Sender<()>) {
+    pub fn install(tx: Sender<u64>) {
         let _ = ESCAPE_TX.set(tx);
         std::thread::spawn(|| unsafe {
             let hmod = GetModuleHandleW(None).unwrap_or_default();
@@ -139,7 +139,17 @@ mod hook {
             if matches!(msg, WM_KEYDOWN | WM_SYSKEYDOWN | WM_KEYUP | WM_SYSKEYUP) {
                 let kb = &*(lparam.0 as *const KBDLLHOOKSTRUCT);
                 let changed = normalize_vk(kb.vkCode);
-                let changed_down = matches!(msg, WM_KEYDOWN | WM_SYSKEYDOWN);
+                let changed_down = matches!(msg, WM_KEYDOWN | WM_SYSKEYDOWN)
+                    || match kb.vkCode {
+                        0xA0 => async_down(0xA1), 0xA1 => async_down(0xA0),
+                        0xA2 => async_down(0xA3), 0xA3 => async_down(0xA2),
+                        0xA4 => async_down(0xA5), 0xA5 => async_down(0xA4),
+                        0x5B => async_down(0x5C), 0x5C => async_down(0x5B),
+                        _ => false,
+                    };
+                if matches!(changed, 0x10 | 0x11 | 0x12 | 0x5B) {
+                    crate::eraser_input::blink_modifier_event(changed, changed_down);
+                }
                 let combo = ACTIVE_COMBO.lock().unwrap().clone();
                 if !combo.is_empty() {
                     // The key in flight isn't in the async table yet, so use the
@@ -155,7 +165,8 @@ mod hook {
                         // is no longer fully held.
                         if ARMED.swap(false, Ordering::Relaxed) {
                             if let Some(tx) = ESCAPE_TX.get() {
-                                let _ = tx.send(());
+                                let round = crate::eraser_input::current_round();
+                                if round != 0 { crate::eraser_input::capture(None); let _ = tx.send(round); }
                             }
                         }
                     } else {
@@ -171,11 +182,45 @@ mod hook {
 #[cfg(target_os = "windows")]
 pub use hook::{install, set_combo};
 
-/// Non-Windows stubs so the crate still compiles elsewhere.
-#[cfg(not(target_os = "windows"))]
-pub fn install(_tx: std::sync::mpsc::Sender<()>) {}
-
-#[cfg(not(target_os = "windows"))]
+#[cfg(target_os = "macos")]
+mod mac {
+    use super::*;
+    use std::sync::{Mutex, OnceLock, mpsc::Sender};
+    static TX: OnceLock<Sender<u64>> = OnceLock::new();
+    static COMBO: Mutex<Vec<u32>> = Mutex::new(Vec::new());
+    static KEYS: Mutex<Option<(HashSet<u32>, bool)>> = Mutex::new(None);
+    pub fn install(tx: Sender<u64>) { let _ = TX.set(tx); }
+    pub fn set_combo(combo: Vec<u32>) {
+        *COMBO.lock().unwrap() = combo;
+        *KEYS.lock().unwrap() = None;
+    }
+    #[no_mangle]
+    pub extern "C" fn blink_keyboard_event(key: u32, down: bool, flags: u32) {
+        let combo = COMBO.lock().unwrap();
+        let mut state = KEYS.lock().unwrap();
+        if key == u32::MAX { *state = None; return; }
+        let (pressed, armed) = state.get_or_insert_with(|| (HashSet::new(), true));
+        for (bit, vk) in [(1,0x11), (2,0x10), (4,0x12), (8,0x5B)] {
+            if flags & bit != 0 { pressed.insert(vk); } else { pressed.remove(&vk); }
+        }
+        if key != 0 { if down { pressed.insert(key); } else { pressed.remove(&key); } }
+        if combo_matches(pressed, &combo) {
+            if *armed {
+                let round = crate::eraser_input::current_round();
+                if round != 0 {
+                    crate::eraser_input::capture(None);
+                    if let Some(tx) = TX.get() { let _ = tx.send(round); }
+                }
+            }
+            *armed = false;
+        } else { *armed = true; }
+    }
+}
+#[cfg(target_os = "macos")]
+pub use mac::{install, set_combo};
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
+pub fn install(_tx: std::sync::mpsc::Sender<u64>) {}
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
 pub fn set_combo(_combo: Vec<u32>) {}
 
 #[cfg(test)]

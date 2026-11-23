@@ -44,6 +44,7 @@ pub fn close_panel(window: tauri::Window) -> Result<(), String> {
 
 #[tauri::command]
 pub fn save_config(
+    app: tauri::AppHandle,
     new_config: DaemonConfig,
     config: State<AppConfig>,
     shared: State<AppSharedState>,
@@ -57,6 +58,9 @@ pub fn save_config(
         .update_config(new_config.clone(), std::time::Instant::now());
     // Push the new combo to the live keyboard hook and persist to disk.
     crate::hotkey::set_combo(crate::hotkey::parse_combo(&new_config.hotkey));
+    if !new_config.hotkey.is_empty() || (new_config.eraser_enabled && new_config.eraser_modifier.is_some()) {
+        app.run_on_main_thread(|| { crate::eraser_input::available(); }).map_err(|e| e.to_string())?;
+    }
     crate::config_store::save(&new_config)?;
     crate::startup::set_auto_start(auto_start).map_err(|e| e.to_string())
 }
@@ -271,6 +275,19 @@ pub async fn set_eraser_held(
         .lock()
         .unwrap()
         .set_eraser_held(round_id, held, std::time::Instant::now()))
+}
+
+#[tauri::command]
+pub async fn holder_click(app: tauri::AppHandle, round_id: u64, double: bool, shared: State<'_, AppSharedState>) -> Result<bool, String> {
+    // Double click remains an exit even if Accessibility was denied on first pickup.
+    if double { return Ok(shared.0.lock().unwrap().holder_click(round_id, true, std::time::Instant::now())); }
+    let held = shared.0.lock().unwrap().snapshot(std::time::Instant::now()).eraser.held;
+    if !held {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        app.run_on_main_thread(move || { let _ = tx.send(crate::eraser_input::available()); }).map_err(|e| e.to_string())?;
+        if !rx.await.unwrap_or(false) { return Err("请在系统设置中允许 Blink 使用辅助功能后重试。关闭按钮仍然可用。".into()); }
+    }
+    Ok(shared.0.lock().unwrap().holder_click(round_id, false, std::time::Instant::now()))
 }
 
 #[tauri::command]

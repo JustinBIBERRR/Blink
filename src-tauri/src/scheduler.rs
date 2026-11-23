@@ -20,6 +20,7 @@ pub enum SystemEvent {
     Locked(bool),
     Sleeping(bool),
     Silenced(bool),
+    Modifier { key: u32, down: bool },
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
@@ -34,6 +35,8 @@ pub struct EraserSnapshot {
 pub struct Scheduler {
     eraser: EraserSnapshot,
     eraser_last: Option<[f64; 2]>,
+    temporary_eraser: bool,
+    holder_pickup: Option<Instant>,
     idle_deferred: bool,
     return_grace_until: Option<Instant>,
     locked: bool,
@@ -56,6 +59,8 @@ impl Scheduler {
                 ..Default::default()
             },
             eraser_last: None,
+            temporary_eraser: false,
+            holder_pickup: None,
             idle_deferred: false,
             return_grace_until: None,
             locked: false,
@@ -88,6 +93,9 @@ impl Scheduler {
         if self.config.interval_secs != config.interval_secs {
             self.next_due = now + Duration::from_secs(config.interval_secs);
         }
+        if self.config.eraser_modifier != config.eraser_modifier && self.temporary_eraser {
+            if let Some((id, _, _)) = self.active { self.set_eraser_held(id, false, now); }
+        }
         self.config = config;
     }
 
@@ -101,6 +109,19 @@ impl Scheduler {
     pub fn system_event(&mut self, event: SystemEvent, now: Instant) {
         self.advance_clock(now);
         match event {
+            SystemEvent::Modifier { key, down } => {
+                if self.config.eraser_modifier.map(|m| m.key()) == Some(key) {
+                    if let Some((id, _, _)) = self.active {
+                        if down && !self.eraser.held {
+                            self.temporary_eraser = self.set_eraser_held(id, true, now);
+                            if self.temporary_eraser { crate::eraser_input::temporary_key(key); }
+                        } else if !down && self.temporary_eraser {
+                            self.set_eraser_held(id, false, now);
+                        }
+                    }
+                }
+                return;
+            }
             SystemEvent::Locked(value) => self.locked = value,
             SystemEvent::Sleeping(value) => self.sleeping = value,
             SystemEvent::Silenced(value) => {
@@ -138,6 +159,7 @@ impl Scheduler {
             self.config.eraser_enabled && self.config.reminder_mode == ReminderMode::Fog;
         self.generation += 1;
         self.active = Some((self.generation, now, self.config.reminder_mode));
+        crate::eraser_input::active_round(Some(self.generation));
         self.next_due = now + Duration::from_secs(self.config.interval_secs);
         self.generation
     }
@@ -234,11 +256,28 @@ impl Scheduler {
 
     fn reset_eraser(&mut self) {
         crate::eraser_input::capture(None);
+        crate::eraser_input::active_round(None);
+        crate::eraser_input::temporary_key(0);
         self.eraser = EraserSnapshot {
             radius: 38.0,
             ..Default::default()
         };
         self.eraser_last = None;
+        self.temporary_eraser = false;
+        self.holder_pickup = None;
+    }
+
+    /// Click count comes from the OS/webview; remember the docked first click even
+    /// though the first click already picked up the shared eraser.
+    pub fn holder_click(&mut self, round_id: u64, double: bool, now: Instant) -> bool {
+        if self.active.map(|a| a.0) != Some(round_id) { return false; }
+        if double && self.eraser.enabled && (!self.eraser.held || self.holder_pickup.is_some_and(|at| now.saturating_duration_since(at) <= Duration::from_secs(2))) {
+            return self.finish(round_id, now);
+        }
+        let pickup = !self.eraser.held;
+        if !self.set_eraser_held(round_id, pickup, now) { return false; }
+        self.holder_pickup = if pickup { Some(now) } else { None };
+        true
     }
 
     pub fn set_eraser_held(&mut self, round_id: u64, held: bool, now: Instant) -> bool {
@@ -249,6 +288,8 @@ impl Scheduler {
         {
             return false;
         }
+        self.temporary_eraser = false;
+        crate::eraser_input::temporary_key(0);
         self.eraser.held = held;
         self.eraser_last = None;
         crate::eraser_input::capture(if held { Some(round_id) } else { None });
@@ -262,6 +303,12 @@ impl Scheduler {
         }
         if kind == 3 {
             self.set_eraser_held(round_id, false, now);
+            return;
+        }
+        if kind == 4 {
+            if x.is_finite() {
+                self.eraser.radius = (self.eraser.radius + x * 4.0).clamp(12.0, 160.0);
+            }
             return;
         }
         self.eraser.cursor = Some([x, y]);
@@ -314,6 +361,68 @@ mod tests {
     use super::*;
     use crate::state::DaemonConfig;
     use std::time::{Duration, Instant};
+
+    #[test]
+    fn docked_double_click_finishes_after_first_click_has_picked_up() {
+        let now = Instant::now();
+        let mut config = DaemonConfig::default();
+        config.reminder_mode = ReminderMode::Fog;
+        config.eraser_enabled = true;
+        let mut scheduler = Scheduler::new(config, now);
+        let id = scheduler.preview(now);
+        let fog = now + Duration::from_secs(3);
+        scheduler.holder_click(id, false, fog);
+        assert!(scheduler.snapshot(fog).eraser.held);
+        scheduler.holder_click(id, true, fog + Duration::from_millis(120));
+        assert!(scheduler.snapshot(fog).round_id.is_none());
+        assert!(!scheduler.snapshot(fog).eraser.held);
+        assert!(!scheduler.holder_click(id, false, fog));
+    }
+
+    #[test]
+    fn configured_modifier_temporarily_picks_up_and_returns_without_erasing_marks() {
+        let now = Instant::now();
+        let mut config = DaemonConfig::default();
+        config.reminder_mode = ReminderMode::Fog;
+        config.eraser_enabled = true;
+        config.eraser_modifier = Some(crate::state::EraserModifier::Alt);
+        let mut scheduler = Scheduler::new(config, now);
+        let id = scheduler.preview(now);
+        let fog = now + Duration::from_secs(3);
+        scheduler.system_event(SystemEvent::Modifier { key: 0x10, down: true }, fog);
+        assert!(!scheduler.snapshot(fog).eraser.held);
+        scheduler.system_event(SystemEvent::Modifier { key: 0x12, down: true }, fog);
+        assert!(scheduler.snapshot(fog).eraser.held);
+        scheduler.eraser_input(id, 1, 5.0, 10.0, fog);
+        scheduler.system_event(SystemEvent::Modifier { key: 0x12, down: false }, fog);
+        assert!(!scheduler.snapshot(fog).eraser.held);
+        assert_eq!(scheduler.snapshot(fog).eraser.strokes.len(), 1);
+        scheduler.eraser_input(id, 0, 100.0, 100.0, fog);
+        assert_eq!(scheduler.snapshot(fog).eraser.strokes.len(), 1);
+        scheduler.tick(now + Duration::from_secs(23));
+        assert!(scheduler.snapshot(now).round_id.is_none());
+    }
+
+    #[test]
+    fn wheel_changes_only_future_strokes_without_extending_round() {
+        let now = Instant::now();
+        let mut config = DaemonConfig::default();
+        config.reminder_mode = ReminderMode::Fog;
+        config.eraser_enabled = true;
+        let mut scheduler = Scheduler::new(config, now);
+        let id = scheduler.preview(now);
+        let fog = now + Duration::from_secs(3);
+        scheduler.set_eraser_held(id, true, fog);
+        scheduler.eraser_input(id, 1, 10.0, 10.0, fog);
+        scheduler.eraser_input(id, 2, 10.0, 10.0, fog);
+        scheduler.eraser_input(id, 4, 1.0, 0.0, fog);
+        scheduler.eraser_input(id, 1, 20.0, 20.0, fog);
+        let strokes = scheduler.snapshot(fog).eraser.strokes;
+        assert_eq!(strokes[0][4], 38.0);
+        assert_eq!(strokes[1][4], 42.0);
+        scheduler.tick(now + Duration::from_secs(23));
+        assert!(scheduler.snapshot(now).round_id.is_none());
+    }
 
     #[test]
     fn every_round_exit_discards_held_eraser_and_rejects_queued_strokes() {
