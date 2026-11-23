@@ -4,6 +4,7 @@ mod config_store;
 mod daemon;
 mod db;
 mod hotkey;
+mod input_idle;
 mod presentation;
 mod scheduler;
 mod silence;

@@ -21,6 +21,8 @@ pub enum SystemEvent {
 }
 
 pub struct Scheduler {
+    idle_deferred: bool,
+    return_grace_until: Option<Instant>,
     locked: bool,
     sleeping: bool,
     last_clock: Instant,
@@ -35,6 +37,8 @@ pub struct Scheduler {
 impl Scheduler {
     pub fn new(config: DaemonConfig, now: Instant) -> Self {
         Self {
+            idle_deferred: false,
+            return_grace_until: None,
             locked: false,
             sleeping: false,
             last_clock: now,
@@ -44,6 +48,18 @@ impl Scheduler {
             active: None,
             paused_until: None,
             is_silenced: false,
+        }
+    }
+
+    /// Idle input controls display eligibility, never accumulated use time.
+    pub fn idle_for(&mut self, idle: Duration, now: Instant) {
+        if idle >= Duration::from_secs(300) {
+            self.idle_deferred = true;
+            self.return_grace_until = None;
+        } else if self.idle_deferred {
+            self.idle_deferred = false;
+            // Start once at the observed return input, not on each subsequent keystroke.
+            self.return_grace_until = Some(now - idle + Duration::from_secs(30));
         }
     }
 
@@ -122,6 +138,8 @@ impl Scheduler {
         }
         if self.active.is_none()
             && now >= self.next_due
+            && !self.idle_deferred
+            && self.return_grace_until.is_none_or(|until| now >= until)
             && !self.is_silenced
             && !self.locked
             && !self.sleeping
@@ -188,6 +206,49 @@ mod tests {
     use super::*;
     use crate::state::DaemonConfig;
     use std::time::{Duration, Instant};
+
+    #[test]
+    fn five_minutes_idle_defers_due_reminder_but_reading_before_threshold_counts() {
+        let now = Instant::now();
+        let mut config = DaemonConfig::default();
+        config.interval_secs = 299;
+        let mut reading = Scheduler::new(config.clone(), now);
+        reading.idle_for(Duration::from_secs(299), now + Duration::from_secs(299));
+        reading.tick(now + Duration::from_secs(299));
+        assert!(reading.snapshot(now).round_id.is_some());
+        config.interval_secs = 300;
+        let mut away = Scheduler::new(config, now);
+        away.idle_for(Duration::from_secs(300), now + Duration::from_secs(300));
+        away.tick(now + Duration::from_secs(300));
+        assert_eq!(away.snapshot(now).round_id, None);
+    }
+
+    #[test]
+    fn missed_intervals_coalesce_and_return_grace_resets_interval_only_when_shown() {
+        let now = Instant::now();
+        let mut config = DaemonConfig::default();
+        config.interval_secs = 300;
+        let mut scheduler = Scheduler::new(config, now);
+        scheduler.idle_for(Duration::from_secs(300), now + Duration::from_secs(300));
+        scheduler.tick(now + Duration::from_secs(300));
+        scheduler.idle_for(Duration::from_secs(3600), now + Duration::from_secs(3600));
+        scheduler.tick(now + Duration::from_secs(3600));
+        assert_eq!(scheduler.snapshot(now).round_id, None);
+        scheduler.idle_for(Duration::ZERO, now + Duration::from_secs(3601));
+        scheduler.tick(now + Duration::from_secs(3601));
+        assert_eq!(scheduler.snapshot(now).round_id, None);
+        scheduler.idle_for(Duration::ZERO, now + Duration::from_secs(3630));
+        scheduler.tick(now + Duration::from_secs(3630));
+        assert_eq!(scheduler.snapshot(now).round_id, None);
+        scheduler.tick(now + Duration::from_secs(3631));
+        assert!(scheduler.snapshot(now).round_id.is_some());
+        scheduler.tick(now + Duration::from_secs(3634));
+        assert_eq!(scheduler.snapshot(now).round_id, None);
+        scheduler.tick(now + Duration::from_secs(3930));
+        assert_eq!(scheduler.snapshot(now).round_id, None);
+        scheduler.tick(now + Duration::from_secs(3931));
+        assert!(scheduler.snapshot(now).round_id.is_some());
+    }
 
     #[test]
     fn closing_fog_ends_current_round_and_rejects_delayed_close() {
