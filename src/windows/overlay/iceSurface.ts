@@ -4,6 +4,83 @@ export interface IceSurface {
   readonly height: number;
 }
 
+export interface TimedEraserStroke {
+  readonly segment: readonly [number, number, number, number, number];
+  readonly startedAtMs: number;
+}
+
+export const eraserMeltDurationMs = 650;
+
+export interface EraserMeltCache {
+  projection: string;
+  strokes: readonly TimedEraserStroke[];
+  settledCount: number;
+  pixels: Uint8ClampedArray;
+}
+
+export function createEraserMeltCache(): EraserMeltCache {
+  return { projection: '', strokes: [], settledCount: 0, pixels: new Uint8ClampedArray() };
+}
+
+export function paintEraserMeltMask(
+  mask: HTMLCanvasElement,
+  strokes: readonly TimedEraserStroke[],
+  nowMs: number,
+  viewport: { width: number; height: number; originX?: number; originY?: number; scale?: number },
+  cache?: EraserMeltCache,
+): void {
+  const { width, height, originX = 0, originY = 0, scale = 1 } = viewport;
+  const reduction = Math.min(1, 960 / Math.max(width, height));
+  const w = Math.max(1, Math.round(width * reduction));
+  const h = Math.max(1, Math.round(height * reduction));
+  if (mask.width !== w || mask.height !== h) { mask.width = w; mask.height = h; }
+  const ctx = mask.getContext('2d')!;
+  const pixels = ctx.createImageData(w, h);
+  const projection = `${width},${height},${originX},${originY},${scale}`;
+  if (cache && (cache.projection !== projection || cache.strokes !== strokes || cache.settledCount > strokes.length || (cache.settledCount > 0 && nowMs - strokes[cache.settledCount - 1].startedAtMs < eraserMeltDurationMs))) {
+    cache.projection = projection;
+    cache.strokes = strokes;
+    cache.settledCount = 0;
+    cache.pixels = new Uint8ClampedArray(pixels.data.length);
+  }
+  let settledCount = cache?.settledCount ?? 0;
+  while (settledCount < strokes.length && nowMs - strokes[settledCount].startedAtMs >= eraserMeltDurationMs) settledCount++;
+  if (cache) pixels.data.set(cache.pixels);
+  for (let strokeIndex = cache?.settledCount ?? 0; strokeIndex < strokes.length; strokeIndex++) {
+    const { segment, startedAtMs } = strokes[strokeIndex];
+    if (!segment.every(Number.isFinite) || !Number.isFinite(startedAtMs) || !(scale > 0)) continue;
+    const [ax, ay, bx, by, radius] = segment;
+    const r = radius / scale;
+    if (!(r > 0)) continue;
+    const x1 = (ax - originX) / scale, y1 = (ay - originY) / scale;
+    const x2 = (bx - originX) / scale, y2 = (by - originY) / scale;
+    const left = Math.max(0, Math.floor((Math.min(x1, x2) - r) * w / width));
+    const right = Math.min(w - 1, Math.ceil((Math.max(x1, x2) + r) * w / width));
+    const top = Math.max(0, Math.floor((Math.min(y1, y2) - r) * h / height));
+    const bottom = Math.min(h - 1, Math.ceil((Math.max(y1, y2) + r) * h / height));
+    const strength = .08 + .92 * smooth(0, eraserMeltDurationMs, nowMs - startedAtMs);
+    const maxAlpha = Math.round(255 * strength);
+    const dx = x2 - x1, dy = y2 - y1, lengthSquared = dx * dx + dy * dy;
+    for (let y = top; y <= bottom; y++) {
+      for (let x = left; x <= right; x++) {
+        const i = (y * w + x) * 4;
+        if (pixels.data[i + 3] >= maxAlpha) continue;
+        const px = (x + .5) * width / w, py = (y + .5) * height / h;
+        const t = lengthSquared ? Math.max(0, Math.min(1, ((px - x1) * dx + (py - y1) * dy) / lengthSquared)) : 0;
+        const distance = Math.hypot(px - x1 - t * dx, py - y1 - t * dy) / r;
+        const coverage = strength * (1 - smooth(.86, 1, distance));
+        pixels.data[i] = pixels.data[i + 1] = pixels.data[i + 2] = 255;
+        pixels.data[i + 3] = Math.max(pixels.data[i + 3], Math.round(255 * coverage));
+      }
+    }
+    if (cache && strokeIndex === settledCount - 1) {
+      cache.pixels.set(pixels.data);
+      cache.settledCount = settledCount;
+    }
+  }
+  ctx.putImageData(pixels, 0, 0);
+}
+
 export const iceTextureUrl = new URL('../../assets/ice/deep-frost.png', import.meta.url).href;
 
 const smooth = (a: number, b: number, t: number) => {
@@ -52,12 +129,17 @@ export function createIceSurface(width: number, height: number, texture?: HTMLIm
 export function paintFogGrowthMask(mask: HTMLCanvasElement, fogElapsedSeconds: number): void {
   const ctx = mask.getContext('2d')!;
   const pixels = ctx.createImageData(mask.width, mask.height);
-  const strength = smooth(0, .65, fogElapsedSeconds) * (1 - smooth(17, 20, fogElapsedSeconds));
+  const strength = smooth(0, .65, fogElapsedSeconds);
   const front = .012 + .57 * smooth(0, 5, fogElapsedSeconds);
   for (let i = 0; i < mask.width * mask.height; i++) {
-    const threshold = field((i % mask.width) / mask.width, Math.floor(i / mask.width) / mask.height);
+    const x = (i % mask.width) / mask.width, y = Math.floor(i / mask.width) / mask.height;
+    const threshold = field(x, y);
+    const radius = Math.hypot((x - .5) * 2, (y - .5) * 2) / Math.SQRT2;
+    const meltThreshold = radius * .91 + .035 * Math.sin(x * 23 + y * 11) * Math.sin(y * 19 - x * 7);
+    const meltFront = (fogElapsedSeconds - 17) / 3 * 1.2 - .1;
+    const remaining = fogElapsedSeconds >= 20 ? 0 : 1 - smooth(meltThreshold - .08, meltThreshold + .08, meltFront);
     pixels.data[i * 4] = pixels.data[i * 4 + 1] = pixels.data[i * 4 + 2] = 255;
-    pixels.data[i * 4 + 3] = Math.round(255 * smooth(threshold - .014, threshold + .065, front) * strength);
+    pixels.data[i * 4 + 3] = Math.round(255 * smooth(threshold - .014, threshold + .065, front) * strength * remaining);
   }
   ctx.putImageData(pixels, 0, 0);
 }

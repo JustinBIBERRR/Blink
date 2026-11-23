@@ -3,7 +3,7 @@
 import { onMounted, onUnmounted, ref, watch } from 'vue';
 import { invoke } from '@tauri-apps/api/core';
 import type { Snapshot } from '../../composables/useReminder';
-import { createIceSurface, iceTextureUrl, paintFogGrowthMask, paintIceSurface, type IceSurface } from './iceSurface';
+import { createIceSurface, iceTextureUrl, paintFogGrowthMask, paintIceSurface, paintEraserMeltMask, createEraserMeltCache, type TimedEraserStroke, type IceSurface } from './iceSurface';
 
 const props = defineProps<{ snapshot: Snapshot; receivedAt: number }>();
 const canvas = ref<HTMLCanvasElement>();
@@ -13,7 +13,8 @@ const nativeMask = document.createElement('canvas');
 nativeMask.width = mask.width; nativeMask.height = mask.height;
 const nativeContext = nativeMask.getContext('2d')!;
 const erased = document.createElement('canvas');
-const eraseContext = erased.getContext('2d')!;
+let timedStrokes: TimedEraserStroke[] = [];
+const meltCache = createEraserMeltCache();
 const texture = new Image();
 let surface: IceSurface | undefined;
 let desktop: HTMLImageElement | undefined;
@@ -28,6 +29,7 @@ texture.src = iceTextureUrl;
 watch([() => props.snapshot.round_id, () => props.snapshot.mode], async ([id, mode]) => {
   const version = ++requestVersion;
   desktop = undefined;
+  timedStrokes = [];
   if (mounted) start();
   if (id === null || mode !== 'fog') return;
   try {
@@ -44,6 +46,15 @@ watch([() => props.snapshot.round_id, () => props.snapshot.mode], async ([id, mo
   } catch (error) { console.error('Desktop blur capture failed', error); }
 }, { immediate: true });
 
+watch([() => props.snapshot.round_id, () => props.snapshot.mode, () => props.snapshot.eraser.strokes], ([, , strokes]) => {
+  if (!active()) { timedStrokes = []; return; }
+  if (strokes.length < timedStrokes.length) timedStrokes = [];
+  const startedAtMs = performance.now();
+  for (let i = timedStrokes.length; i < strokes.length; i++) {
+    timedStrokes.push({ segment: [...strokes[i]], startedAtMs });
+  }
+}, { immediate: true });
+
 function start() {
   if (frame) cancelAnimationFrame(frame);
   frame = requestAnimationFrame(render);
@@ -56,7 +67,6 @@ function render(now: number) {
   const w = window.innerWidth, h = window.innerHeight;
   if (output.width !== w || output.height !== h) {
     output.width = w; output.height = h;
-    erased.width = w; erased.height = h;
     surface = undefined;
   }
   const out = output.getContext('2d')!;
@@ -66,20 +76,8 @@ function render(now: number) {
   surface ??= createIceSurface(w, h, texture);
   const since = (props.snapshot.elapsed_ms + now - props.receivedAt) / 1000 - 3;
   paintFogGrowthMask(mask, since);
-  eraseContext.clearRect(0, 0, w, h);
-  eraseContext.lineCap = 'round';
-  eraseContext.strokeStyle = 'white'; eraseContext.fillStyle = 'white';
   const [ox, oy, scale] = geometry;
-  for (const [ax, ay, bx, by, r] of props.snapshot.eraser.strokes) {
-    eraseContext.lineWidth = 2 * r / scale;
-    eraseContext.beginPath();
-    eraseContext.moveTo((ax - ox) / scale, (ay - oy) / scale);
-    eraseContext.lineTo((bx - ox) / scale, (by - oy) / scale);
-    eraseContext.stroke();
-    eraseContext.beginPath();
-    eraseContext.arc((bx - ox) / scale, (by - oy) / scale, r / scale, 0, Math.PI * 2);
-    eraseContext.fill();
-  }
+  paintEraserMeltMask(erased, timedStrokes, now, { width: w, height: h, originX: ox, originY: oy, scale }, meltCache);
   paintIceSurface(output, { surface, growthMask: mask, erased, desktop });
   if (!sending && now - lastMask >= 50) {
     nativeContext.clearRect(0, 0, mask.width, mask.height);
