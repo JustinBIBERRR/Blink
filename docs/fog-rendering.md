@@ -30,3 +30,28 @@ compiles on macOS. Remaining packaged-app acceptance: moving desktop content
 under the native blur and clear frontier, multi-monitor alignment and mixed DPI,
 close controls without focus changes, and Windows capture/compositing. These are
 manual release checks, not proven by the lifecycle tests or frontend build.
+
+## Shared eraser (#9)
+
+The optional eraser is off by default. Its held state and persistent global stroke
+segments belong to Scheduler and retain the original round deadline. Every monitor
+projects the same state. Coordinates use CoreGraphics desktop points on macOS
+(native NSWindow bounds account for negative origins) and physical pixels on Windows.
+The complete decoration canvas and native blur mask both subtract the stroke mask;
+transparent holes expose live desktop pixels, never a replacement screenshot.
+
+Only a small holder/close window accepts ordinary clicks. Fullscreen visuals remain
+pass-through. Active CGEventTap / WH_MOUSE_LL callbacks selectively consume owned
+left presses and their paired releases, queue events to the scheduler, and pass
+right/middle buttons through. Ending any round clears atomic capture eligibility
+immediately; an already swallowed press still consumes its matching release.
+Accessibility denial leaves pickup inactive and the independent close control usable.
+macOS asks only when an enabled eraser is explicitly picked up.
+
+Automated scheduler coverage verifies shared pickup, multiple strokes (including
+negative desktop coordinates), return without losing marks, sleep cleanup and stale
+round rejection. Native compilation and frontend build do not prove native input:
+release acceptance still requires both platforms with mixed-DPI monitors, original
+application drags, right/middle clicks, ending mid-drag, denied Accessibility, and
+moving desktop content visible through erased frost/droplets. SVG felt/holder art is
+an implementation of the approved oblique reference, pending visual acceptance.
